@@ -1,5 +1,5 @@
-# Draft DemoProject for the tmprl-demo.cloud registry. Not committed to the registry yet:
-# onboarding needs the owner's go-ahead and the project secrets below created first.
+# DemoProject for the tmprl-demo.cloud registry; the registry's copy is
+# projects/demo/agentic-sdlc.yaml. Keep the two in step.
 # Validate from the registry repo:  python3 scripts/validate_projects.py
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
@@ -21,6 +21,9 @@ spec:
       taskQueueEnv: TEMPORAL_TASK_QUEUE
       baseTaskQueue: agentic-sdlc
     links:
+      slideDeck:
+        label: Agentic SDLC deck
+        url: https://docs.google.com/presentation/d/1EetmG7GZ3IYJQlmwinZzJipw3z5K4FaHxvBXcC-t1FM/edit
       runbook:
         label: Agentic SDLC runbook
         url: https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/main/RUNBOOK.md
