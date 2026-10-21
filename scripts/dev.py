@@ -127,7 +127,7 @@ def wait_for(cmd: list[str], what: str, timeout: float = 30) -> None:
 def main() -> None:
     sys.stdout.reconfigure(line_buffering=True)
     if not args.no_temporal and subprocess.run([*TEMPORAL, "operator", "cluster", "health"], capture_output=True).returncode != 0:
-        processes["temporal"] = spawn("temporal", ["temporal", "server", "start-dev", "--headless",
+        processes["temporal"] = spawn("temporal", ["temporal", "server", "start-dev", "--ui-port", "8233",
                                                    "--db-filename", str(LOGS / "temporal.db"), "--log-level", "error"])
         wait_for([*TEMPORAL, "operator", "cluster", "health"], "Temporal")
     if subprocess.run(["redis-cli", "ping"], capture_output=True).returncode != 0:

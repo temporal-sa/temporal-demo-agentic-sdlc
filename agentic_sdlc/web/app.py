@@ -187,7 +187,7 @@ async def _list_runs(owner_key: str) -> list[dict]:
     async for execution in state.temporal.list_workflows(query, limit=20):
         memo = await execution.memo_value("run", default=None)
         if memo:
-            runs.append({**_run_summary(memo), "workflow_id": execution.id,
+            runs.append({**_run_summary(memo), "workflow_id": execution.id, "temporal_run_id": execution.run_id,
                          "closed": execution.status != WorkflowExecutionStatus.RUNNING})
     return sorted(runs, key=lambda r: r["started_at"], reverse=True)
 
@@ -230,6 +230,9 @@ async def _run_view(owner_key: str, workflow_id: str) -> dict | None:
     view = {
         "run": run.model_dump(mode="json"),
         "workflow_id": workflow_id,
+        # The Temporal UI's execution pages need the run ID as well as the Workflow ID.
+        "temporal_run_id": description.run_id,
+        "agent_run_ids": {a: d.run_id for a, d in zip(agent_ids, agent_descriptions) if d is not None},
         "closed": description.status != WorkflowExecutionStatus.RUNNING,
         "workflow_status": description.status.name if description.status else "UNKNOWN",
         "retries": retries,

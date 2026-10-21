@@ -2,7 +2,7 @@
 // the person the run is waiting for), and the proof: code, storefront and GitHub.
 
 import { useEffect, useMemo, useState } from "react";
-import { ago, api, money, type Config, type Retry, type RunView, type Step } from "../api";
+import { ago, api, money, temporalLink, type Config, type Retry, type RunView, type Step } from "../api";
 import type { AgentFeed } from "../live";
 import { useNow } from "../live";
 import { StepList } from "../kit/StepList";
@@ -74,7 +74,7 @@ export function RunConsole({ view, feeds, config, onError }: {
             <span className="meter-value">{(run.usage.input_tokens + run.usage.output_tokens).toLocaleString()}</span>
             <span className="muted">{run.usage.requests} model calls</span>
           </div>
-          <a className="button small secondary ultraviolet" href={`${config.temporal_ui}/workflows/${encodeURIComponent(view.workflow_id)}`} target="_blank" rel="noreferrer">Open in Temporal</a>
+          <a className="button small secondary ultraviolet" href={temporalLink(config.temporal_ui, view.workflow_id, view.temporal_run_id)} target="_blank" rel="noreferrer">Open in Temporal</a>
         </div>
       </header>
 

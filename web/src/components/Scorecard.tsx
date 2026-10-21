@@ -1,10 +1,10 @@
 // The decision criteria a team needs proven before it trusts agents with its SDLC, ticked
 // off from evidence the runs recorded. Nothing ticks unless the system did it.
 
-import type { Criterion, Proof, RunSummary } from "../api";
+import { temporalLink, type Criterion, type Proof, type RunSummary } from "../api";
 import { CRITERIA } from "../story";
 
-export interface Evidence { proof: Proof; runId: string; workflowId: string }
+export interface Evidence { proof: Proof; runId: string; workflowId: string; temporalRunId?: string }
 
 /** Every proof across this session's runs, plus D5, which spans runs: a run that finished on
  *  the old pipeline version after a run on the new version had started. */
@@ -12,7 +12,7 @@ export function collectEvidence(runs: (RunSummary & { proofs?: Proof[] })[]): Ma
   const found = new Map<Criterion, Evidence>();
   for (const run of [...runs].sort((a, b) => a.started_at - b.started_at)) {
     for (const proof of run.proofs ?? []) {
-      if (!found.has(proof.criterion)) found.set(proof.criterion, { proof, runId: run.run_id, workflowId: run.workflow_id });
+      if (!found.has(proof.criterion)) found.set(proof.criterion, { proof, runId: run.run_id, workflowId: run.workflow_id, temporalRunId: run.temporal_run_id });
     }
   }
   const v2 = runs.filter((r) => r.version === "v2");
@@ -21,7 +21,7 @@ export function collectEvidence(runs: (RunSummary & { proofs?: Proof[] })[]): Ma
   if (pinned && !found.has("D5")) {
     found.set("D5", {
       proof: { criterion: "D5", detail: `“${pinned.title}” finished on v1 while new runs used v2`, at: pinned.ended_at! },
-      runId: pinned.run_id, workflowId: pinned.workflow_id,
+      runId: pinned.run_id, workflowId: pinned.workflow_id, temporalRunId: pinned.temporal_run_id,
     });
   }
   return found;
@@ -46,7 +46,7 @@ export function Scorecard({ evidence, temporalUi, large = false }: { evidence: M
                 {e ? (
                   <p className="evidence">
                     {e.proof.detail}{" "}
-                    <a href={`${temporalUi}/workflows/${encodeURIComponent(e.workflowId)}`} target="_blank" rel="noreferrer">Evidence</a>
+                    <a href={temporalLink(temporalUi, e.workflowId, e.temporalRunId)} target="_blank" rel="noreferrer">Evidence</a>
                   </p>
                 ) : (
                   large ? <p className="evidence muted">{c.beat}</p> : null

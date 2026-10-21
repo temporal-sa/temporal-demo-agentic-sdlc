@@ -34,13 +34,13 @@ export interface Environments {
 }
 
 export interface RunView {
-  run: RunState; workflow_id: string; closed: boolean; workflow_status: string; retries: Retry[];
+  run: RunState; workflow_id: string; temporal_run_id: string; agent_run_ids: Record<string, string>; closed: boolean; workflow_status: string; retries: Retry[];
   faults: Record<string, string[]>; environments: Environments; workers: Worker[]; apps: string; read_at: number;
 }
 
 export interface RunSummary {
   run_id: string; title: string; status: RunState["status"]; version: string; started_at: number;
-  ended_at: number | null; usage: Usage; workflow_id: string; closed: boolean;
+  ended_at: number | null; usage: Usage; workflow_id: string; temporal_run_id: string; closed: boolean;
 }
 export interface SessionView { runs: RunSummary[]; environments: Environments; workers: Worker[]; apps: string }
 
@@ -89,6 +89,12 @@ export function ago(seconds: number): string {
   if (seconds < 60) return `${Math.max(0, Math.floor(seconds))}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
   return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+/** A link to an execution in the Temporal UI, which needs the run ID; without one, a search for the ID. */
+export function temporalLink(ui: string, workflowId: string, runId?: string | null): string {
+  if (runId) return `${ui}/workflows/${encodeURIComponent(workflowId)}/${runId}/history`;
+  return `${ui}/workflows?query=${encodeURIComponent(`WorkflowId="${workflowId}"`)}`;
 }
 
 export function shortSha(sha: string | null | undefined): string {

@@ -1,7 +1,7 @@
 // The story acts around the live run. Each one makes a single point the presenter can
 // leave on screen while talking, and each problem it names is one the live run resolves.
 
-import { ago, api, money, type Config, type RunSummary, type SessionView } from "../api";
+import { ago, api, money, temporalLink, type Config, type RunSummary, type SessionView } from "../api";
 import { CRITERIA, LIFECYCLE, RECAP, STATS } from "../story";
 import { Scorecard, type Evidence } from "./Scorecard";
 import { StorefrontPanel } from "./Panels";
@@ -42,7 +42,7 @@ function RunCard({ run, config, onOpen }: { run: RunSummary & { issue_url?: stri
         <button className="button small primary ultraviolet" onClick={onOpen}>Replay the run</button>
         {run.issue_url && <a href={run.issue_url} target="_blank" rel="noreferrer">Issue</a>}
         {run.pr_url && <a href={run.pr_url} target="_blank" rel="noreferrer">Pull request</a>}
-        <a href={`${config.temporal_ui}/workflows/${encodeURIComponent(run.workflow_id)}`} target="_blank" rel="noreferrer">Event History</a>
+        <a href={temporalLink(config.temporal_ui, run.workflow_id, run.temporal_run_id)} target="_blank" rel="noreferrer">Event History</a>
       </div>
     </div>
   );
