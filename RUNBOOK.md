@@ -334,7 +334,7 @@ The fine-grained PAT is scoped to `temporal-sa/agentic-sdlc-storefront` with Con
 
 1. Open https://github.com/settings/personal-access-tokens/new?name=agentic-sdlc-demo&target_name=temporal-sa&expires_in=366&contents=write&pull_requests=write&issues=write
 2. Under **Repository access**, choose **Only select repositories → agentic-sdlc-storefront**, then **Generate token**.
-3. Put it in `.env.local` as `GITHUB_TOKEN`. For the catalog, update the `github` project secret.
+3. Put it in `.env.local` as `GITHUB_TOKEN`. For the catalog, run `ROTATE_RUNTIME=0 scripts/create-catalog-secrets.sh` to update the `github` project secret.
 
 ## Run it locally
 

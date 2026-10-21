@@ -26,7 +26,7 @@ it passes `scripts/validate_projects.py` in the registry and is not committed th
 8. **Secrets and external state.** Shared `anthropic`, `openai`, `gemini`; project `github`
    (`GITHUB_TOKEN`, a fine-grained PAT for the storefront repo only, expires 2027-10-22) and
    `runtime` (`REDIS_PASSWORD`, `SESSION_SECRET`). Only the worker holds LLM keys and the GitHub
-   token. External state: the public sandbox repo `temporal-sa/agentic-sdlc-storefront`.
+   token. These project secrets exist in AWS account 429214323166, us-west-1 (created with `scripts/create-catalog-secrets.sh`). External state: the public sandbox repo `temporal-sa/agentic-sdlc-storefront`.
 9. **Smoke check.** `GET /healthz`, which only answers once the server has connected to Temporal.
 10. **Known gaps.**
     - Agent-written tests run in the worker pod with a clean environment (no keys, no token), a
