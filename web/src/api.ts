@@ -97,6 +97,13 @@ export function temporalLink(ui: string, workflowId: string, runId?: string | nu
   return `${ui}/workflows?query=${encodeURIComponent(`WorkflowId="${workflowId}"`)}`;
 }
 
+/** Retry reasons in the words the audience needs. */
+export function explainFailure(message: string): string {
+  if (/heartbeat timeout/i.test(message)) return "the worker running it stopped responding";
+  if (/start_to_close|start-to-close/i.test(message)) return "it ran past its timeout";
+  return message;
+}
+
 export function shortSha(sha: string | null | undefined): string {
   return sha ? (sha.length > 12 ? sha.slice(0, 7) : sha) : "—";
 }

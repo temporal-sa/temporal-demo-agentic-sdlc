@@ -47,7 +47,9 @@ Every run makes real model calls on the shared provider keys.
 
 ## Actions estimate
 
-A typical run is roughly 150–300 Actions: about 15 Activities and 5 child Workflows in the
-pipeline, plus each agent's model and tool Activities (a coder turn is 10–40). The console reads
-progress with Describe and List, which aren't billable, and streams agent events from Redis
-rather than Workflow history.
+Measured on a real run (free-shipping issue, two coders, the worker killed once mid-build): about
+**170 Actions**. That's 1 Workflow start, 4 child agents (8), about 130 Activity attempts (model calls,
+tool calls, GitHub, deploys and checks, including the retries after the crash), 12 Updates, 6 canary
+timers, 4 Signals and about 10 heartbeats that reached the server. A run with a rollback adds a handful.
+The console reads progress with Describe and List, which aren't billable, and streams agent events from
+Redis rather than Workflow history. Count it yourself with the history of any run in the Temporal UI.

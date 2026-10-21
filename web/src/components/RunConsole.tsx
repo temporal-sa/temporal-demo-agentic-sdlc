@@ -2,7 +2,7 @@
 // the person the run is waiting for), and the proof: code, storefront and GitHub.
 
 import { useEffect, useMemo, useState } from "react";
-import { ago, api, money, temporalLink, type Config, type Retry, type RunView, type Step } from "../api";
+import { ago, api, explainFailure, money, temporalLink, type Config, type Retry, type RunView, type Step } from "../api";
 import type { AgentFeed } from "../live";
 import { useNow } from "../live";
 import { StepList } from "../kit/StepList";
@@ -126,7 +126,7 @@ function toTimelineStep(s: Step, retry: Retry | undefined, now: number) {
   const started = s.started_at;
   const time = started ? (s.ended_at ? ago(s.ended_at - started) : `${ago(now - started)}\nso far`) : "";
   let note = s.note;
-  if (retry) note = `Attempt ${retry.attempt}: ${retry.last_failure}. Temporal retries it.`;
+  if (retry) note = `Attempt ${retry.attempt}: ${explainFailure(retry.last_failure)}. Temporal retries it.`;
   return { key: s.key, label: s.lane ? `↳ ${s.label}` : s.label, status, detail: s.detail, note, time, attempt: retry?.attempt };
 }
 
@@ -244,7 +244,7 @@ function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError 
         <span>{feed?.tools.length ?? 0} tool calls</span>
       </div>
       {faults.length > 0 && <div className="injected mono">Injected fault armed: {faults.join(", ").replace(/_/g, " ")}</div>}
-      {retry && <div className="agent-retry mono">Attempt {retry.attempt}: {retry.last_failure}</div>}
+      {retry && <div className="agent-retry mono">Attempt {retry.attempt}: {explainFailure(retry.last_failure)}</div>}
       {feed?.approvals.map((a) => (
         <div key={a.id} className="approval">
           <span>Wants to run <code>{a.name}</code>: <code>{a.input}</code></span>
