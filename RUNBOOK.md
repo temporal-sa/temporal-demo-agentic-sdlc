@@ -1,6 +1,6 @@
 # Runbook: Agentic SDLC on Temporal
 
-How to present the demo and reset it, written so someone who didn't build it can run it. Permalinks point at commit [`7a32f22`](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/tree/7a32f22e8407c56c5d07da68db3ee1c23715a5a1).
+How to present the demo and reset it, written so someone who didn't build it can run it. Permalinks point at commit [`f852b89`](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/tree/f852b89cb139362af430700e38da94e437ab0f51).
 
 ## What it shows
 
@@ -129,7 +129,7 @@ To show a clean ship instead, skip this beat. The canary promotes after its chec
 
 **When to use it:** after beat 3, or when someone asks where the orchestration lives.
 
-**Where it is:** [`agentic_sdlc/pipeline/workflow.py` lines 121–146](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/pipeline/workflow.py#L121-L146) (`code -g agentic_sdlc/pipeline/workflow.py:121`)
+**Where it is:** [`agentic_sdlc/pipeline/workflow.py` lines 121–146](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/pipeline/workflow.py#L121-L146) (`code -g agentic_sdlc/pipeline/workflow.py:121`)
 
 ```python
 async def run(self, request: RunRequest) -> RunState:
@@ -159,7 +159,7 @@ async def run(self, request: RunRequest) -> RunState:
 
 **When to use it:** after beat 4.
 
-**Where it is:** [`agentic_sdlc/agents/workflows.py` lines 103–130](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/agents/workflows.py#L103-L130) and [`pipeline/workflow.py` lines 409–423](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/pipeline/workflow.py#L409-L423)
+**Where it is:** [`agentic_sdlc/agents/workflows.py` lines 103–130](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/agents/workflows.py#L103-L130) and [`pipeline/workflow.py` lines 409–424](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/pipeline/workflow.py#L409-L424)
 
 ```python
 @agent.defn(name="CoderAgent")
@@ -192,7 +192,7 @@ result = await workflow.execute_activity_method(
 
 **When to use it:** after beat 4, when someone asks about files on the dead worker.
 
-**Where it is:** [`agentic_sdlc/agents/tools.py` lines 179–205](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/agents/tools.py#L179-L205)
+**Where it is:** [`agentic_sdlc/agents/tools.py` lines 179–205](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/agents/tools.py#L179-L205)
 
 ```python
 async def checkout(workspace: Workspace) -> Path:
@@ -215,7 +215,7 @@ async def _commit_and_push(root, workspace, path, message) -> str:
 
 **When to use it:** after beat 3 or 6.
 
-**Where it is:** [`pipeline/workflow.py` lines 356–386](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/pipeline/workflow.py#L356-L386)
+**Where it is:** [`pipeline/workflow.py` lines 356–386](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/pipeline/workflow.py#L356-L386)
 
 ```python
 await workflow.wait_condition(lambda: self._decision is not None)
@@ -242,7 +242,7 @@ def _validate_decide(self, response: GateResponse) -> None:
 
 **When to use it:** after beat 5.
 
-**Where it is:** [`pipeline/workflow.py` lines 184–197](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/pipeline/workflow.py#L184-L197) and [`agents/runtime.py` lines 29–39](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/agents/runtime.py#L29-L39)
+**Where it is:** [`pipeline/workflow.py` lines 184–197](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/pipeline/workflow.py#L184-L197) and [`agents/runtime.py` lines 29–39](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/agents/runtime.py#L29-L39)
 
 ```python
 await asyncio.gather(*(
@@ -270,7 +270,7 @@ MODEL_ACTIVITY = ActivityConfig(
 
 **When to use it:** after beat 7.
 
-**Where it is:** [`pipeline/workflow.py` lines 298–339](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/pipeline/workflow.py#L298-L339)
+**Where it is:** [`pipeline/workflow.py` lines 298–337](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/pipeline/workflow.py#L298-L337)
 
 ```python
 for n in range(1, checks + 1):
@@ -292,7 +292,7 @@ for n in range(1, checks + 1):
 
 **When to use it:** after beat 8.
 
-**Where it is:** [`agentic_sdlc/worker.py` lines 38–44](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/worker.py#L38-L44) and [`pipeline/workflow.py` line 70](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/7a32f22e8407c56c5d07da68db3ee1c23715a5a1/agentic_sdlc/pipeline/workflow.py#L70)
+**Where it is:** [`agentic_sdlc/worker.py` lines 38–44](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/worker.py#L38-L44) and [`pipeline/workflow.py` line 70](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/pipeline/workflow.py#L70)
 
 ```python
 deployment = WorkerDeploymentConfig(
