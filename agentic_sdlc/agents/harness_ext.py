@@ -1,4 +1,4 @@
-"""Small gap-fillers for temporal-agent-harness (temporal-sa fork @ f12f194) and Pydantic AI 2.14.1.
+"""Small gap-fillers for temporal-agent-harness (temporal-sa fork @ f12f194) and Pydantic AI 2.53.
 
 Every workaround for a library gap lives here, each with the reason, so an upgrade has one
 file to re-check. The patterns come from temporal-demo-advanced-ai-agent's harness_ext.py.
@@ -166,7 +166,7 @@ async def heartbeating() -> AsyncIterator[None]:
 
 async def event_stream_handler(ctx: RunContext[Any], stream: AsyncIterable[AgentStreamEvent]) -> None:
     """The harness's handler, except it reads ``usage`` as the property it is in Pydantic AI
-    2.14.1. The harness calls ``stream.usage()``, which raises and is swallowed, so every
+    2.53. The harness calls ``stream.usage()``, which raises and is swallowed, so every
     ``model_interaction_ended`` would go out without token counts."""
     context = _resolve_stream_context(ctx)
     if context is None or not isinstance(stream, StreamedResponse):

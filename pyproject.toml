@@ -7,12 +7,9 @@ requires-python = ">=3.13,<3.15"
 dependencies = [
     "temporalio==1.34.0",
     "temporal-agent-harness[pydantic-ai,redis] @ git+https://github.com/temporal-sa/temporal-agent-harness@f12f194d6f828dd7bc3b9afff2b1106bd0bf947a#subdirectory=python",
-    "pydantic-ai-slim[anthropic,google,openai,temporal]==2.14.1",
-    # Pydantic AI 2.14.1 predates these SDKs' next majors; versions match the ones
-    # temporal-demo-advanced-ai-agent runs with the same Pydantic AI.
-    "anthropic==0.125.0",
-    "openai==3.8.0",
-    "google-genai==2.7.0",
+    "pydantic-ai-slim[anthropic,google,openai,temporal]==2.53.0",
+    # anthropic 2.x changed its message types in a way Pydantic AI 2.53 can't construct yet.
+    "anthropic>=1.9,<2",
     "pydantic>=2.13",
     "fastapi>=0.136",
     "uvicorn[standard]>=0.47",

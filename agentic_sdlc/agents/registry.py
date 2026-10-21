@@ -90,7 +90,7 @@ def build_registry():
 
 def settings_for(choice: ModelChoice):
     """Per-provider settings. Claude 5.x needs adaptive thinking with an effort level, which
-    Pydantic AI 2.14.1's generic ``thinking`` setting doesn't send."""
+    the generic ``thinking`` setting doesn't send in the Pydantic AI version we pin."""
     from pydantic_ai.settings import ModelSettings
 
     if choice.provider == "anthropic":
