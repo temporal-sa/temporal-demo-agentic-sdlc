@@ -17,7 +17,6 @@ from pydantic_ai.durable_exec.temporal import AgentPlugin
 from redis.asyncio import Redis
 from temporalio.common import VersioningBehavior, WorkerDeploymentVersion
 from temporalio.worker import Worker, WorkerDeploymentConfig
-from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
 from agentic_sdlc import config
 from agentic_sdlc.activities import ACTIVITY_CLASSES
@@ -26,6 +25,7 @@ from agentic_sdlc.agents.tools import ALL_TOOLS
 from agentic_sdlc.agents.workflows import CoderAgent, PlannerAgent, ReviewerAgent
 from agentic_sdlc.pipeline.environments import Environments
 from agentic_sdlc.pipeline.workflow import IssueToProduction
+from agentic_sdlc.sandbox import workflow_runner
 from agentic_sdlc.temporal_client import connect
 
 log = logging.getLogger("agentic_sdlc.worker")
@@ -51,16 +51,7 @@ async def main() -> None:
         activities=activities,
         plugins=[AgentPlugin(agent) for agent in ALL_AGENTS],
         deployment_config=deployment,
-        # Settings, data models and Activity definitions are shared with Workflow code rather
-        # than re-imported per run: they hold no Workflow state, and config reads the
-        # environment once, which the sandbox forbids during a Workflow.
-        workflow_runner=SandboxedWorkflowRunner(
-            restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                "agentic_sdlc.config", "agentic_sdlc.models", "agentic_sdlc.activities",
-                "agentic_sdlc.agents.tools", "agentic_sdlc.agents.harness_ext", "agentic_sdlc.agents.registry",
-                "agentic_sdlc.agents.runtime", "agentic_sdlc.faults", "agentic_sdlc.temporal_client",
-            )
-        ),
+        workflow_runner=workflow_runner(),
     )
     heartbeat = asyncio.create_task(_announce_liveness())
     log.info(

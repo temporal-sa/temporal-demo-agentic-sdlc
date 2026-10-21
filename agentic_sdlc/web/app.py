@@ -193,7 +193,8 @@ async def _list_runs(owner_key: str) -> list[dict]:
 
 
 def _run_summary(memo: dict) -> dict:
-    return {k: memo.get(k) for k in ("run_id", "title", "status", "version", "started_at", "ended_at", "usage")}
+    return {k: memo.get(k) for k in ("run_id", "title", "status", "version", "started_at", "ended_at", "usage", "proofs",
+                                     "issue_url", "pr_url")}
 
 
 @app.get("/api/runs/{run_id}")

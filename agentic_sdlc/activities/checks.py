@@ -10,6 +10,8 @@ from agentic_sdlc.models import Workspace
 
 
 class TestRun(BaseModel):
+    __test__ = False  # not a pytest test class
+
     passed: bool
     output: str
 

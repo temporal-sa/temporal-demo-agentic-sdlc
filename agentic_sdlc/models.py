@@ -224,6 +224,7 @@ class RunRequest(BaseModel):
     autonomy: Autonomy = "auto"
     budget_usd: float = 3.0
     canary_bake_seconds: int = 90
+    canary_check_seconds: int = 15
 
 
 class GateDecision(BaseModel):

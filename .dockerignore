@@ -1,0 +1,10 @@
+.venv
+.git
+.logs
+.workdirs
+web/node_modules
+web/dist
+deck/out
+**/__pycache__
+.env.local
+*.egg-info

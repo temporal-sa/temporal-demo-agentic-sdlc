@@ -88,7 +88,6 @@ QUICK = dict(start_to_close_timeout=timedelta(minutes=3), retry_policy=RetryPoli
 MAX_PLAN_ROUNDS = 3
 MAX_TEST_FIX_ROUNDS = 2
 CANARY_WEIGHT = 20
-CANARY_CHECK_EVERY = timedelta(seconds=15)
 
 
 class GateResponse(BaseModel):
@@ -302,9 +301,10 @@ class IssueToProduction:
         async with self._step("canary"):
             await self._deploy(DeployRequest(action="canary", sha=sha, weight=CANARY_WEIGHT, run_id=self._request.run_id))
             self._state.canary_sha = sha
-            checks = max(1, self._request.canary_bake_seconds // int(CANARY_CHECK_EVERY.total_seconds()))
+            every = self._request.canary_check_seconds
+            checks = max(1, self._request.canary_bake_seconds // every)
             for n in range(1, checks + 1):
-                await workflow.sleep(CANARY_CHECK_EVERY)
+                await workflow.sleep(timedelta(seconds=every))
                 check = await self._check("canary")
                 self._detail("canary", f"Check {n}/{checks}: {check.detail}")
                 if not check.healthy:
@@ -332,7 +332,9 @@ class IssueToProduction:
             ), **GITHUB)
             self._detail("rollback", f"Reverted in {revert.url}")
             self._state.canary_sha = None
-            self._prove("D4", f"Bad canary caught ({check.detail}); deploy and merge reverted automatically")
+            failed = f"{check.failed_probes} of {check.probes} probes failed" if check.failed_probes else (
+                f"{check.browser_errors} browser errors in {check.browser_requests} page loads")
+            self._prove("D4", f"Canary caught a bad release ({failed}); traffic, merge and issue rolled back")
 
     async def _finish(self, repo: RunRepo, shipped: bool) -> None:
         async with self._step("done"):
@@ -437,7 +439,8 @@ class IssueToProduction:
         role = agent_id.rsplit(".", 1)[-1]
         if result.attempt > 1 or any("heartbeat" in r.last_failure.lower() for r in result.stats.retried):
             self._prove("D1", f"{role} lost its worker mid-turn and resumed on another; "
-                              f"{result.stats.model_calls} model calls and {result.stats.tool_calls} tool calls ran once")
+                              f"{_count(result.stats.model_calls, 'model call')} and "
+                              f"{_count(result.stats.tool_calls, 'tool call')} each ran once")
         rate_limited = [r for r in result.stats.retried if "429" in r.last_failure or "rate" in r.last_failure.lower()]
         if rate_limited:
             worst = max(r.attempt for r in rate_limited)
@@ -550,6 +553,10 @@ def _plan_comment(plan: Plan) -> str:
 
 def _pr_body(plan: Plan, repo: RunRepo) -> str:
     return f"Closes #{repo.issue_number}\n\n{plan.summary}\n\n" + "\n".join(f"- {s.title}" for s in plan.subtasks)
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
 def _duration(seconds: float) -> str:

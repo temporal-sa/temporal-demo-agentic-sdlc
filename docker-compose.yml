@@ -1,0 +1,30 @@
+# The same process boundaries as the catalog deployment, on one machine:
+#   docker compose up --build    → console on http://localhost:8000, Temporal UI on :8233
+# Reads LLM keys and GITHUB_TOKEN from .env.local.
+services:
+  temporal:
+    image: temporalio/temporal:latest
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
+    ports: ["7233:7233", "8233:8233"]
+  redis:
+    build: { context: ., dockerfile: docker/redis.Dockerfile }
+  web:
+    build: { context: ., dockerfile: docker/app.Dockerfile }
+    ports: ["8000:8000"]
+    environment: &common
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: agentic-sdlc
+      TEMPORAL_UI_URL: http://localhost:8233/namespaces/default
+      REDIS_URL: redis://redis:6379/0
+      WEB_INTERNAL_URL: http://web:8000
+      GITHUB_SANDBOX_REPO: temporal-sa/agentic-sdlc-storefront
+    depends_on: [temporal, redis]
+  worker:
+    build: { context: ., dockerfile: docker/app.Dockerfile }
+    command: ["python", "-m", "agentic_sdlc.worker"]
+    env_file: [.env.local]
+    environment:
+      <<: *common
+      PIPELINE_VERSION: v1
+    depends_on: [temporal, redis, web]
