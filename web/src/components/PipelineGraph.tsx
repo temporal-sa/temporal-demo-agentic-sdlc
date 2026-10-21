@@ -42,7 +42,7 @@ export function PipelineGraph({ run, selected, onSelect, retrying }: {
   const status = (s: Step) => (retrying.has(s.key) ? "retrying" : s.status);
 
   return (
-    <svg className="pipeline-graph" viewBox={`0 0 ${W} ${height}`} role="img"
+    <svg className={`pipeline-graph ${main.length > 12 ? "dense" : ""}`} viewBox={`0 0 ${W} ${height}`} role="img"
       aria-label={`Pipeline: ${main.map((s) => `${SHORT[s.key] ?? s.label} ${status(s)}`).join(", ")}`}>
       {/* main line, coloured up to the furthest step that has started */}
       <line x1={40} y1={MAIN_Y} x2={W - 40} y2={MAIN_Y} className="edge" />

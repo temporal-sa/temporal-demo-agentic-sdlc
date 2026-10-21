@@ -20,11 +20,22 @@ services:
       WEB_INTERNAL_URL: http://web:8000
       GITHUB_SANDBOX_REPO: temporal-sa/agentic-sdlc-storefront
     depends_on: [temporal, redis]
-  worker:
+  # One worker per pipeline version, as in the catalog. The console makes one current.
+  worker-v1:
     build: { context: ., dockerfile: docker/app.Dockerfile }
     command: ["python", "-m", "agentic_sdlc.worker"]
     env_file: [.env.local]
     environment:
       <<: *common
+      TEMPORAL_WORKER_BUILD_ID: v1
       PIPELINE_VERSION: v1
+    depends_on: [temporal, redis, web]
+  worker-v2:
+    build: { context: ., dockerfile: docker/app.Dockerfile }
+    command: ["python", "-m", "agentic_sdlc.worker"]
+    env_file: [.env.local]
+    environment:
+      <<: *common
+      TEMPORAL_WORKER_BUILD_ID: v2
+      PIPELINE_VERSION: v2
     depends_on: [temporal, redis, web]

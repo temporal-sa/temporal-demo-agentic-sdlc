@@ -35,6 +35,13 @@
 .run-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .run-title { display: flex; align-items: center; gap: .8rem; min-width: 0; }
 .run-title .heading { font-size: 1.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gh-chips { display: flex; gap: .4rem; flex-wrap: nowrap; }
+.gh-chip { font-family: var(--font-mono); font-size: .72rem; padding: .25rem .55rem; border: 1px solid var(--uv-light); color: var(--off-white); text-decoration: none; white-space: nowrap; background: rgba(68, 76, 231, .15); }
+.gh-chip:hover { background: rgba(68, 76, 231, .35); }
+.gh-chip:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--green-soft); }
+.gh-chip.revert { border-color: var(--yellow); background: rgba(254, 203, 47, .1); }
+.gh-chip.quiet { border-color: var(--slate-500); background: none; color: var(--indigo-100); }
+.gh-chip.pending { border-color: var(--slate-500); background: none; color: var(--slate-300); }
 .run-meters { display: flex; align-items: center; gap: 1.4rem; }
 .meter { display: grid; gap: .15rem; min-width: 9rem; }
 .meter-value { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
@@ -61,6 +68,7 @@
 .pipeline-graph .node.selected { stroke-width: 4; }
 .pipeline-graph .node-label, .pipeline-graph .lane-label { font-family: var(--font-mono); font-size: 12px; fill: var(--indigo-100); cursor: pointer; }
 .pipeline-graph .lane-label { fill: var(--indigo-100); font-size: 11.5px; paint-order: stroke; stroke: #17172a; stroke-width: 6px; stroke-linejoin: round; }
+.pipeline-graph.dense .node-label { font-size: 10.5px; }
 .pipeline-graph g[data-status="pending"] .node-label { fill: var(--slate-500); }
 @keyframes node-pulse { 50% { fill: color-mix(in srgb, var(--status) 45%, transparent); } }
 .graph-legend { position: absolute; right: 1rem; bottom: .4rem; display: flex; gap: .9rem; font-family: var(--font-mono); font-size: .66rem; color: var(--slate-300); }
@@ -153,6 +161,8 @@
 
 .change-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 1rem; }
 .change-grid .card { display: grid; gap: .8rem; align-content: start; }
+.current-version { display: grid; gap: .2rem; }
+.current-version .stat-value { font-size: 3.2rem; color: var(--green); }
 .versions { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
 
 .act-proof { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); align-content: stretch; }

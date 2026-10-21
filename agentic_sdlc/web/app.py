@@ -37,7 +37,7 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_client import AgentClient
 
-from agentic_sdlc import config, faults
+from agentic_sdlc import config, faults, versions
 from agentic_sdlc.agents.registry import allowlist
 from agentic_sdlc.models import GateDecision, RoleModels, RunRequest, RunState
 from agentic_sdlc.pipeline.environments import EnvState, TrafficBatch
@@ -78,8 +78,10 @@ async def lifespan(_app: FastAPI):
     state.redis = Redis.from_url(config.REDIS_URL)
     state.http = httpx.AsyncClient(timeout=15, follow_redirects=True)
     flusher = asyncio.create_task(_flush_traffic_forever())
+    keeper = asyncio.create_task(_keep_a_current_version())
     yield
     flusher.cancel()
+    keeper.cancel()
     await state.http.aclose()
 
 
@@ -502,11 +504,46 @@ async def reset(owner_key: Owner):
     return {"ok": True, "stopped": sum(1 for r in runs if not r["closed"])}
 
 
+# -- Pipeline versions ----------------------------------------------------------------------
+
+
+@app.get("/api/versions")
+async def get_versions(owner_key: Owner):
+    return await versions.describe(state.temporal)
+
+
+class SetVersion(BaseModel):
+    build_id: Literal["v1", "v2"]
+
+
+@app.post("/api/versions/current")
+async def set_version(body: SetVersion, owner_key: Owner):
+    """Roll out a pipeline version: new runs start on it, in-flight runs stay pinned to theirs.
+    This is a presenter control for the whole deployment (each crashable workspace has its own)."""
+    try:
+        return await versions.set_current(state.temporal, body.build_id)
+    except RPCError as err:
+        raise HTTPException(409, f"Couldn't make {body.build_id} current: {err.message}") from err
+
+
+async def _keep_a_current_version() -> None:
+    """A fresh deployment has no current version, and versioned workers take no new runs until
+    one is set. Make v1 current as soon as its worker registers."""
+    while True:
+        try:
+            if await versions.ensure_current(state.temporal):
+                await asyncio.sleep(60)
+                continue
+        except RPCError:
+            pass
+        await asyncio.sleep(5)
+
+
 # -- Local presenter controls (scripts/dev's supervisor) ------------------------------------
 
 
 @app.post("/api/worker/{action}")
-async def worker_control(action: Literal["kill", "start", "rollout-v2", "rollback-v1"], owner_key: Owner):
+async def worker_control(action: Literal["kill", "start"], owner_key: Owner):
     if not config.SUPERVISOR_URL:
         raise HTTPException(409, "No local supervisor. In the catalog, use the workspace's crash controls.")
     response = await state.http.post(f"{config.SUPERVISOR_URL}/{action}")

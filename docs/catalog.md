@@ -17,8 +17,12 @@ it passes `scripts/validate_projects.py` in the registry and is not committed th
 4. **Distinct across crashable workspaces.** The task queue is in every Workflow ID, branch name,
    Redis key and worker liveness key, so clones sharing the Temporal namespace, the GitHub repo or
    a Redis never see each other's work.
-5. **Build and components.** One image (`docker/app.Dockerfile`) for `web` (temporalAccess, port 80)
-   and `worker` (versioned, deployment `agentic-sdlc`), plus `redis` (`docker/redis.Dockerfile`).
+5. **Build and components.** One image (`docker/app.Dockerfile`) for `web` (temporalAccess, port 80),
+   `worker-v1` and `worker-v2` (plain `worker: true` components with fixed build IDs, so they stay
+   crashable and autoscaled), plus `redis` (`docker/redis.Dockerfile`). As in the pizza Worker
+   Versioning demo, the app registers the versions itself and the console makes one current, so the
+   D5 beat needs no redeploy. The Worker Deployment is `<task queue>-pipeline`, so a crashable
+   workspace has its own.
 6. **Routes.** One ingress host to `web`, which serves the console, `/api`, and the storefront
    environments at `/apps/<owner>/<env>/`.
 7. **Temporal configuration.** Platform-injected `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE` and API
@@ -32,8 +36,8 @@ it passes `scripts/validate_projects.py` in the registry and is not committed th
     - Agent-written tests run in the worker pod with a clean environment (no keys, no token), a
       throwaway HOME and a timeout, not in the platform's `isolatedExecutor`. Moving `run_tests` and
       `run_command` to an executor is the next hardening step.
-    - The v2 pipeline is the same image with `PIPELINE_VERSION=v2`; showing D5 in the catalog means
-      rolling out a new Worker Deployment Version with that value.
+    - Rolling out v2 in the shared demo changes the version for every session's new runs. It's a
+      presenter control with a confirmation; a crashable workspace keeps it private.
     - Large-payload offload is off (no shared bucket); tool output is capped to keep payloads small.
 
 ## Cost guards

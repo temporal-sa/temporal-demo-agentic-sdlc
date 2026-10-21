@@ -31,9 +31,10 @@ _load_dotenv()
 # through this one variable. Every Workflow and Activity in a run inherits it.
 TASK_QUEUE = os.environ.get("TEMPORAL_TASK_QUEUE", "agentic-sdlc")
 
-# Pipeline version this worker runs. The catalog's Worker Controller injects the build ID;
-# locally scripts/dev starts one worker per version.
-DEPLOYMENT_NAME = os.environ.get("TEMPORAL_DEPLOYMENT_NAME", "agentic-sdlc")
+# One worker runs per pipeline version (build IDs v1 and v2), in the catalog and locally. The
+# Worker Deployment is named after the task queue, so each crashable workspace has its own and
+# its rollouts stay inside it (see versions.py).
+DEPLOYMENT_NAME = os.environ.get("TEMPORAL_DEPLOYMENT_NAME") or f"{TASK_QUEUE}-pipeline"
 BUILD_ID = os.environ.get("TEMPORAL_WORKER_BUILD_ID", "")
 PIPELINE_VERSION = os.environ.get("PIPELINE_VERSION", "v1")
 

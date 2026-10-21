@@ -46,6 +46,7 @@ export function GitHubPanel({ view, repo }: { view: RunView; repo: string }) {
       <div className="gh-links">
         {run.issue_url ? <a href={run.issue_url} target="_blank" rel="noreferrer">Issue #{run.issue_url.split("/").pop()}</a> : <span className="muted">Issue not opened yet</span>}
         {run.pr_url && <a href={run.pr_url} target="_blank" rel="noreferrer">Pull request #{run.pr_url.split("/").pop()}</a>}
+        {run.revert_pr_url && <a href={run.revert_pr_url} target="_blank" rel="noreferrer">Revert PR #{run.revert_pr_url.split("/").pop()}</a>}
         <a href={`https://github.com/${repo}/branches/all?query=${encodeURIComponent(run.run_id)}`} target="_blank" rel="noreferrer">Agent branches</a>
       </div>
       {run.plan && (

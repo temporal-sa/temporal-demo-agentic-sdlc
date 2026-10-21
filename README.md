@@ -78,7 +78,7 @@ Open the console at http://localhost:8000 and the Temporal UI at http://localhos
 
 | Command | What it does |
 |---|---|
-| `uv run python scripts/dev.py` | Temporal, Redis, the web server and a v1 worker, with the console's kill, start and roll-out controls |
+| `uv run python scripts/dev.py` | Temporal, Redis, the web server and a worker per pipeline version (v1, v2), with the console's kill and start controls |
 | `uv run python scripts/drive_run.py discount-code` | A full run from the command line, approving every gate |
 | `uv run pytest` | Pipeline tests against a local dev server, with fake agents |
 | `docker compose up --build` | The catalog's process layout on one machine |
@@ -92,12 +92,12 @@ Open the console at http://localhost:8000 and the Temporal UI at http://localhos
 | `MAX_ACTIVE_RUNS_PER_USER` | `2` | Runs one session can have in progress |
 | `AGENT_MODELS_<PROVIDER>` | see `agents/registry.py` | Comma-separated allowlist per provider; first is the default |
 | `ENABLED_PROVIDERS` | `anthropic,openai,google` | Providers the console offers |
-| `PIPELINE_VERSION` | `v1` | `v2` adds the security-review agent |
+| `PIPELINE_VERSION` | `v1` | Set per worker with `TEMPORAL_WORKER_BUILD_ID`; `v2` adds the security-review agent |
 
 ## Notes
 
 - **Harness fork.** This uses the temporal-sa fork of temporal-agent-harness, pinned to commit `f12f194` on its `pluggable-event-streams` branch, for `RedisEventStream`. `agents/harness_ext.py` holds the few workarounds it needs for Pydantic AI 2.53, each commented with why.
-- **The v2 pipeline** is the same code with `PIPELINE_VERSION=v2`. Each Worker Deployment Version always runs with one value, so a Pinned run replays against the path it started on. In a real project v2 would be the next commit.
+- **Both pipeline versions run all the time,** one worker each, and the console makes one current through Temporal's Worker Deployment API (the pizza Worker Versioning demo's approach), so the rollout works live in the catalog. The v2 pipeline is the same code with `PIPELINE_VERSION=v2`. Each Worker Deployment Version always runs with one value, so a Pinned run replays against the path it started on. In a real project v2 would be the next commit.
 - **Agent-written tests** run in the worker with a clean environment and a timeout, not in an isolated sandbox. See [docs/catalog.md](docs/catalog.md).
 - **Costs are estimates** from token counts and the genai-prices database that ships with Pydantic AI, not provider bills.
 - **The GitHub token expires on 2027-10-22.** Rotation is in the RUNBOOK.

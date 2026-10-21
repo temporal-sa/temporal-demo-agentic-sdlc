@@ -107,13 +107,17 @@ To show a clean ship instead, skip this beat. The canary promotes after its chec
 
 ### 8. Change the pipeline mid-run (D5)
 
-**Do:** start a second run and approve its plan. While it's coding, press **5** and click **Roll out v2**. Start a third run.
+Works the same in the catalog and locally: workers for both pipeline versions are always running, and the console makes one of them current.
 
-**The audience sees** the in-flight run keep **pipeline v1** and finish without a security stage. The new run shows **pipeline v2** with a **Security** step. **D5** ticks when the v1 run finishes after a v2 run has started.
+**Do:** start a second run and approve its plan. While it's coding, press **5** and click **Roll out v2** (confirm the prompt). Then start a third run.
 
-**Say:** "Each run is pinned to the version it started on. Running work finishes exactly as it began, new work gets the new pipeline, and nothing is patched in place."
+**The audience sees** **New runs start on** change from v1 to v2, and v1 show "draining: pinned runs still finishing". The in-flight run keeps **pipeline v1** in its header and finishes without a security stage. The new run shows **pipeline v2**, with a **Security** step in its graph. **D5** ticks when the v1 run finishes after a v2 run has started.
 
-**Proof:** `temporal worker deployment describe --name agentic-sdlc` shows both versions. Each run's history shows its pinned version.
+**Say:** "Both versions are deployed. Rolling out v2 is one call to Temporal that changes which version new runs start on. Each run is pinned to the version it started on, so running work finishes exactly as it began, new work gets the new pipeline, and nothing is patched in place."
+
+**Proof:** in the Temporal UI, each run's page shows its Build ID and **Pinned**. From a terminal, `temporal worker deployment describe --name agentic-sdlc-pipeline` lists both versions and which one is current.
+
+**Note:** the rollout applies to everyone using the same deployment. In the shared catalog demo, other sessions' new runs also get v2, so switch back with **Make v1 current again** afterwards. A crashable workspace has its own deployment, so use one when you want the beat to yourself.
 
 ### 9. Proof (act 6, D6)
 
@@ -292,7 +296,7 @@ for n in range(1, checks + 1):
 
 **When to use it:** after beat 8.
 
-**Where it is:** [`agentic_sdlc/worker.py` lines 38–44](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/worker.py#L38-L44) and [`pipeline/workflow.py` line 70](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/f852b89cb139362af430700e38da94e437ab0f51/agentic_sdlc/pipeline/workflow.py#L70)
+**Where it is:** [`agentic_sdlc/versions.py`](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/main/agentic_sdlc/versions.py) and [`agentic_sdlc/worker.py`](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/main/agentic_sdlc/worker.py)
 
 ```python
 deployment = WorkerDeploymentConfig(
@@ -302,18 +306,26 @@ deployment = WorkerDeploymentConfig(
 )
 ```
 
+```python
+await client.workflow_service.set_worker_deployment_current_version(
+    SetWorkerDeploymentCurrentVersionRequest(
+        namespace=client.namespace, deployment_name=config.DEPLOYMENT_NAME, build_id=build_id, ...))
+```
+
 **What you need to understand:**
 
-- Pinned means a run, and the agents it starts, stay on the build they started on. v1 keeps serving them while v2 takes new runs.
-- No `patched()` branches: the change ships as a new version.
-- In this demo, v2 is the same code with `PIPELINE_VERSION=v2`, which turns on the security agent. Each version always runs with one value, so replay is safe. In a real project v2 is the next commit.
+- One worker runs per version (build IDs `v1` and `v2`), each joining the same Worker Deployment. Pinned means a run, and the agents it starts, stay on the build they started on.
+- Rolling out is changing the deployment's current version: one API call, no redeploy. v1 keeps serving its pinned runs until they finish ("draining").
+- No `patched()` branches: the change ships as a new version. In this demo v2 is the same code with `PIPELINE_VERSION=v2`, which turns on the security agent; each version always runs with one value, so replay is safe. In a real project v2 is the next commit.
+- The `Environments` entity lives as long as the session, so instead of staying pinned it continues-as-new onto the new version when the current version changes (`pipeline/environments.py`).
+- The deployment is named `<task queue>-pipeline`, so each crashable workspace has its own and can't change the shared demo's version.
 
 **Docs:** [Worker Versioning](https://docs.temporal.io/worker-versioning)
 
 ## Reset and tear down
 
 - **Between audiences:** click **Reset session** in the bottom bar. It terminates this browser session's runs, empties its environments, clears faults, and closes its issues and PRs and deletes its branches on GitHub. That cleanup runs as a Standalone Activity on the worker. Other sessions aren't touched.
-- **Back to v1:** press **5** and click **Make v1 current again**, or restart `scripts/dev.py`.
+- **Back to v1:** press **5** and click **Make v1 current again**. Do this after every D5 beat in the shared catalog demo.
 - **Nothing left running:** runs end on their own; environments close after 24 hours idle; faults expire after 10 minutes. Stop `scripts/dev.py` with Ctrl-C.
 
 ## When something goes wrong
@@ -325,7 +337,7 @@ deployment = WorkerDeploymentConfig(
 | A step is pink with `ProviderRejected` | A model name or key is wrong for that provider | Pick another model in **New run**, or check the key in `.env.local` |
 | **Couldn't start the run: You already have 2 runs in progress** | The per-session cap | Let one finish or **Reset session** |
 | The run stops at **Budget** | Estimated spend reached the run's budget | **Raise budget by $3**, or start runs with a higher budget |
-| **Roll out v2** does nothing | The v2 worker didn't start | See `.logs/worker-v2.log` and `.logs/dev.log` |
+| **Roll out v2** says the version has no pollers | The v2 worker isn't running | Locally see `.logs/worker-v2.log`; in the catalog check the `worker-v2` component |
 | Storefront tab says nothing is deployed | No run has reached staging in this session | Expected until a run merges |
 
 ## Rotate the GitHub token

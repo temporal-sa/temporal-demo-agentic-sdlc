@@ -206,6 +206,7 @@ class RunState(BaseModel):
     budget_usd: float = 0.0
     issue_url: str | None = None
     pr_url: str | None = None
+    revert_pr_url: str | None = None
     plan: Plan | None = None
     review: Review | None = None
     staging_sha: str | None = None

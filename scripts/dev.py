@@ -6,11 +6,10 @@
 It supervises the processes and listens on 127.0.0.1:8765 for the console's controls:
 
     POST /kill          SIGKILL every worker (the "crash" beat)
-    POST /start         start the worker(s) again
-    POST /rollout-v2    start a v2 worker and make v2 the current Worker Deployment Version
-    POST /rollback-v1   make v1 current again
+    POST /start         start the workers again
 
-Workers run as Worker Deployment Versions (build IDs v1 and v2) with Pinned Workflows, so a run
+It runs one worker per pipeline version (build IDs v1 and v2), as the catalog does. The console
+makes a version current through Temporal (agentic_sdlc/versions.py); runs are Pinned, so a run
 finishes on the version it started on. Logs go to .logs/.
 """
 
@@ -31,7 +30,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / ".logs"
 CONTROL_PORT = 8765
-DEPLOYMENT = "agentic-sdlc"
 TEMPORAL = ["temporal", "--disable-config-file", "--address", "localhost:7233"]
 
 parser = argparse.ArgumentParser()
@@ -42,7 +40,7 @@ args = parser.parse_args()
 LOGS.mkdir(exist_ok=True)
 processes: dict[str, subprocess.Popen] = {}
 workers: dict[str, subprocess.Popen] = {}  # version -> process
-wanted_versions: list[str] = ["v1"]
+wanted_versions: list[str] = ["v1", "v2"]
 lock = threading.Lock()
 
 
@@ -59,19 +57,8 @@ def start_worker(version: str) -> None:
     if proc and proc.poll() is None:
         return
     workers[version] = spawn(f"worker-{version}", [sys.executable, "-m", "agentic_sdlc.worker"], {
-        "TEMPORAL_WORKER_BUILD_ID": version, "TEMPORAL_DEPLOYMENT_NAME": DEPLOYMENT, "PIPELINE_VERSION": version,
+        "TEMPORAL_WORKER_BUILD_ID": version, "PIPELINE_VERSION": version,
     })
-
-
-def set_current(version: str) -> str:
-    # The version must have polled before it can become current; wait for the worker to start.
-    for _ in range(40):
-        result = subprocess.run([*TEMPORAL, "worker", "deployment", "set-current-version", "--deployment-name",
-                                 DEPLOYMENT, "--build-id", version, "--yes"], capture_output=True, text=True)
-        if result.returncode == 0:
-            return f"{version} is current"
-        time.sleep(0.5)
-    return f"couldn't make {version} current: {result.stderr.strip()[:300]}"
 
 
 def kill_workers() -> int:
@@ -92,14 +79,6 @@ class Control(BaseHTTPRequestHandler):
                 for version in wanted_versions:
                     start_worker(version)
                 body = {"started": wanted_versions}
-            elif self.path == "/rollout-v2":
-                if "v2" not in wanted_versions:
-                    wanted_versions.append("v2")
-                start_worker("v2")
-                body = {"result": set_current("v2"), "note": "v1 keeps running so pinned runs can finish on it"}
-            elif self.path == "/rollback-v1":
-                start_worker("v1")
-                body = {"result": set_current("v1")}
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -136,8 +115,8 @@ def main() -> None:
         processes["redis"] = spawn("redis", ["redis-server", "--port", "6379", "--save", "", "--appendonly", "no"])
         wait_for(["redis-cli", "ping"], "Redis")
 
-    start_worker("v1")
-    print(set_current("v1"))
+    for version in wanted_versions:
+        start_worker(version)
     processes["web"] = spawn("web", [sys.executable, "-m", "uvicorn", "agentic_sdlc.web.app:app", "--port", str(args.port)],
                              {"SUPERVISOR_URL": f"http://127.0.0.1:{CONTROL_PORT}"})
     server = ThreadingHTTPServer(("127.0.0.1", CONTROL_PORT), Control)

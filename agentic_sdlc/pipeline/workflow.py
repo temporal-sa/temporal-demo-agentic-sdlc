@@ -330,7 +330,8 @@ class IssueToProduction:
                 repo=repo.repo, issue_number=repo.issue_number, labels=["rolled-back"], reopen=True,
                 body=f"⏪ Rolled back. The canary failed: {check.detail}. Revert: {revert.url}",
             ), **GITHUB)
-            self._detail("rollback", f"Reverted in {revert.url}")
+            self._state.revert_pr_url = revert.url
+            self._detail("rollback", f"Reverted in PR #{revert.number}")
             self._state.canary_sha = None
             failed = f"{check.failed_probes} of {check.probes} probes failed" if check.failed_probes else (
                 f"{check.browser_errors} browser errors in {check.browser_requests} page loads")

@@ -62,6 +62,7 @@ export function RunConsole({ view, feeds, config, onError }: {
           <span className="status-badge" data-status={RUN_STATUS_VOCAB[run.status]}>{RUN_STATUS_LABEL[run.status]}</span>
           <h2 className="heading">{run.title}</h2>
           {run.version && <span className="badge idle" title="Worker Deployment Version this run is pinned to">pipeline {run.version}</span>}
+          <GitHubLinks run={run} repo={config.repo} />
         </div>
         <div className="run-meters">
           <div className="meter" title="Estimated from token counts with the genai-prices database; not a provider bill">
@@ -118,6 +119,21 @@ export function RunConsole({ view, feeds, config, onError }: {
         </section>
       </div>
     </div>
+  );
+}
+
+/** What the run opened on GitHub, always in view: the issue, the PR, and a revert if it rolled back. */
+function GitHubLinks({ run, repo }: { run: RunView["run"]; repo: string }) {
+  const number = (url: string) => url.split("/").pop();
+  return (
+    <nav className="gh-chips" aria-label="On GitHub">
+      {run.issue_url
+        ? <a className="gh-chip" href={run.issue_url} target="_blank" rel="noreferrer">Issue #{number(run.issue_url)} ↗</a>
+        : <span className="gh-chip pending">Issue not opened yet</span>}
+      {run.pr_url && <a className="gh-chip" href={run.pr_url} target="_blank" rel="noreferrer">PR #{number(run.pr_url)} ↗</a>}
+      {run.revert_pr_url && <a className="gh-chip revert" href={run.revert_pr_url} target="_blank" rel="noreferrer">Revert PR #{number(run.revert_pr_url)} ↗</a>}
+      {run.plan && <a className="gh-chip quiet" href={`https://github.com/${repo}/branches/all?query=${encodeURIComponent(run.run_id)}`} target="_blank" rel="noreferrer">Agent branches ↗</a>}
+    </nav>
   );
 }
 

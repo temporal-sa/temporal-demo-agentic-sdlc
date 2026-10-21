@@ -21,7 +21,7 @@ export interface RunState {
   run_id: string; version: string; title: string;
   status: "running" | "waiting" | "completed" | "rolled_back" | "failed" | "cancelled";
   steps: Step[]; gate: Gate | null; agents: AgentRef[]; usage: Usage; budget_usd: number;
-  issue_url: string | null; pr_url: string | null; plan: Plan | null; review: Review | null;
+  issue_url: string | null; pr_url: string | null; revert_pr_url?: string | null; plan: Plan | null; review: Review | null;
   staging_sha: string | null; canary_sha: string | null; proofs: Proof[]; started_at: number; ended_at: number | null;
 }
 

@@ -2,6 +2,8 @@
 // leave on screen while talking, and each problem it names is one the live run resolves.
 
 import { ago, api, money, temporalLink, type Config, type RunSummary, type SessionView } from "../api";
+import { useState } from "react";
+import { usePoll } from "../live";
 import { CRITERIA, LIFECYCLE, RECAP, STATS } from "../story";
 import { Scorecard, type Evidence } from "./Scorecard";
 import { StorefrontPanel } from "./Panels";
@@ -98,32 +100,56 @@ export function HardAct() {
   );
 }
 
-export function ChangeAct({ session, config, onError }: { session: SessionView; config: Config; onError: (m: string) => void }) {
-  const versions = [...new Set(session.workers.map((w) => w.version))];
-  const control = (action: string) => api(`/api/worker/${action}`, { method: "POST" }).catch((e) => onError(e.message));
+interface Versions { deployment: string; current: string | null; versions: { build_id: string; current: boolean; drainage: string }[] }
+
+export function ChangeAct({ session, onError }: { session: SessionView; config: Config; onError: (m: string) => void }) {
+  const { data: versions, refresh } = usePoll<Versions>("/api/versions", 3000);
+  const [busy, setBusy] = useState<string | null>(null);
+  const current = versions?.current ?? null;
+  const rollOut = async (buildId: "v1" | "v2") => {
+    if (!confirm(`Make ${buildId} current for this deployment? New runs from everyone using it will start on ${buildId}.`)) return;
+    setBusy(buildId);
+    try { await api("/api/versions/current", { json: { build_id: buildId } }); refresh(); }
+    catch (e) { onError((e as Error).message); }
+    finally { setBusy(null); }
+  };
+  const live = session.runs.filter((r) => !r.closed);
   return (
     <div className="act act-change">
       <h1 className="display">Change the pipeline while agents are mid-run.</h1>
       <p className="lede">
-        v2 adds a security-review agent. Each run is pinned to the version it started on, so in-flight runs finish
-        exactly as they began and new runs pick up the new stage. Nothing is patched in place.
+        v2 adds a security-review agent. Both versions' workers are running. Rolling out v2 makes it the current
+        version: new runs start on it, and runs already in flight stay pinned to the version they started on.
+        Nothing is patched in place.
       </p>
       <div className="change-grid">
         <section className="card">
-          <span className="eyebrow">Workers running now</span>
+          <span className="eyebrow">New runs start on</span>
+          <div className="current-version">
+            <span className="stat-value">{current ?? "…"}</span>
+            <span className="muted">Worker Deployment <span className="mono">{versions?.deployment ?? ""}</span></span>
+          </div>
           <ul className="versions">
-            {session.workers.length === 0 && <li className="muted">No workers are running.</li>}
-            {session.workers.map((w) => (
-              <li key={w.pid}><span className="badge good">pipeline {w.version}</span> <span className="mono muted">build {w.build_id ?? "unversioned"} · pid {w.pid}</span></li>
+            {(versions?.versions ?? []).map((v) => (
+              <li key={v.build_id}>
+                <span className={`badge ${v.current ? "good" : "idle"}`}>pipeline {v.build_id}</span>{" "}
+                <span className="mono muted">
+                  {v.current ? "current" : v.drainage === "draining" ? "draining: pinned runs still finishing" : v.drainage || "registered"}
+                  {" · "}{session.workers.filter((w) => w.version === v.build_id).length || "no"} worker(s) live
+                </span>
+              </li>
             ))}
           </ul>
-          {config.local_controls ? (
-            <div className="gate-actions">
-              <button className="button primary ultraviolet" onClick={() => control("rollout-v2")} disabled={versions.includes("v2")}>Roll out v2</button>
-              <button className="button secondary ultraviolet" onClick={() => control("rollback-v1")}>Make v1 current again</button>
-            </div>
-          ) : (
-            <p className="muted">In the catalog, v2 rolls out as a new Worker Deployment Version from the deployment pipeline.</p>
+          <div className="gate-actions">
+            <button className="button primary ultraviolet" onClick={() => rollOut("v2")} disabled={!!busy || current === "v2"}>
+              {busy === "v2" ? "Rolling out…" : "Roll out v2"}
+            </button>
+            <button className="button secondary ultraviolet" onClick={() => rollOut("v1")} disabled={!!busy || current === "v1"}>
+              {busy === "v1" ? "Switching…" : "Make v1 current again"}
+            </button>
+          </div>
+          {live.length > 0 && current && (
+            <p className="muted">{live.filter((r) => r.version && r.version !== current).length} of your {live.length} in-flight run(s) are pinned to an older version and will finish on it.</p>
           )}
         </section>
         <section className="card">
