@@ -1,0 +1,8 @@
+[
+  {"id": "tee-orbit", "name": "Orbit Tee", "price": 28.0, "category": "apparel", "emoji": "👕"},
+  {"id": "mug-nebula", "name": "Nebula Mug", "price": 16.0, "category": "kitchen", "emoji": "☕"},
+  {"id": "cap-comet", "name": "Comet Cap", "price": 24.0, "category": "apparel", "emoji": "🧢"},
+  {"id": "sticker-pack", "name": "Constellation Stickers", "price": 8.0, "category": "accessories", "emoji": "✨"},
+  {"id": "hoodie-eclipse", "name": "Eclipse Hoodie", "price": 64.0, "category": "apparel", "emoji": "🧥"},
+  {"id": "bottle-lunar", "name": "Lunar Bottle", "price": 22.0, "category": "kitchen", "emoji": "🧴"}
+]

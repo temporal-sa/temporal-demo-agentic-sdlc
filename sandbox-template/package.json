@@ -1,0 +1,7 @@
+{
+  "name": "orbit-supply-storefront",
+  "private": true,
+  "type": "module",
+  "description": "A small static storefront that AI agents change in the Temporal agentic SDLC demo.",
+  "scripts": { "test": "node --test tests/" }
+}

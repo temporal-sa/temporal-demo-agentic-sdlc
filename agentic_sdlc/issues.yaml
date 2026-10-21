@@ -1,0 +1,37 @@
+# Prepared issues for the presenter. Each is sized for a few minutes of agent work and splits
+# naturally into logic (src/cart.js + tests) and presentation (index.html, styles.css, src/app.js),
+# so the planner can hand them to coding agents in parallel.
+- id: free-shipping
+  title: Show customers how close they are to free shipping
+  body: |
+    Orders of $75 or more ship free; smaller orders pay a flat $6 shipping fee.
+
+    - Add shipping to the cart totals (subtotal, shipping, tax, total). Tax applies to the subtotal only.
+    - In the cart, show a progress bar with "You're $X away from free shipping" until the
+      threshold is reached, then "You've unlocked free shipping".
+    - Cover the shipping rules with tests.
+- id: discount-code
+  title: Let customers apply the discount code ORBIT10 at checkout
+  body: |
+    Customers should be able to type a discount code in the cart.
+
+    - ORBIT10 takes 10% off the subtotal. Codes are case-insensitive. Any other code shows
+      "That code isn't valid" and changes nothing.
+    - Show the discount as its own line in the totals; tax is calculated after the discount.
+    - Cover the discount rules with tests.
+- id: dark-mode
+  title: Add a dark mode toggle to the storefront
+  body: |
+    Add a toggle in the header that switches the store between light and dark themes.
+
+    - Respect the visitor's system preference on first visit.
+    - Remember the choice in localStorage.
+    - Keep text contrast readable in both themes.
+- id: product-search
+  title: Add a search box that filters products by name
+  body: |
+    Add a search field above the product grid that filters products as the customer types.
+
+    - Matching is case-insensitive and matches anywhere in the product name.
+    - Show "No products match" when nothing matches.
+    - Put the filtering logic in a pure, tested function.

@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+web/node_modules/
+web/dist/
+deck/out/
+.workdirs/
+.pytest_cache/
+.DS_Store
+.logs/
+*.egg-info/
