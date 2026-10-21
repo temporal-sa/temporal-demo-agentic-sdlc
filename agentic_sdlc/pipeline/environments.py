@@ -3,6 +3,10 @@
 It holds the staging commit, the stable production commit, the production canary and its
 traffic weight. The web server serves the storefront from these commits and reads them with
 Describe (the memo), which costs no Actions and still answers while the worker is down.
+
+Versioning: pipeline runs are Pinned and short-lived, but this entity lives as long as the
+session. When a new Worker Deployment Version becomes current, it continues-as-new onto it
+(Upgrade-on-Continue-as-New), carrying its state, so it never holds an old version alive.
 """
 
 from __future__ import annotations
@@ -66,16 +70,20 @@ class Environments:
     async def run(self, state: EnvState | None = None) -> None:
         self._publish()
         while True:
+            info = workflow.info()
             try:
                 await workflow.wait_condition(
-                    lambda: workflow.info().is_continue_as_new_suggested(), timeout=IDLE_TIMEOUT
+                    lambda: info.is_continue_as_new_suggested() or info.is_target_worker_deployment_version_changed(),
+                    timeout=IDLE_TIMEOUT,
                 )
             except TimeoutError:
                 if workflow.now() - self._last_change >= IDLE_TIMEOUT:
                     return  # An abandoned session's environments close themselves.
                 continue
             await workflow.wait_condition(workflow.all_handlers_finished)
-            workflow.continue_as_new(self._state)
+            workflow.continue_as_new(
+                self._state, initial_versioning_behavior=workflow.ContinueAsNewVersioningBehavior.AUTO_UPGRADE
+            )
 
     @workflow.update
     def deploy(self, request: DeployRequest) -> EnvState:
@@ -86,8 +94,12 @@ class Environments:
         elif request.action == "canary":
             s.canary_sha, s.canary_weight, s.canary_traffic = request.sha, request.weight, Traffic()
         elif request.action == "promote":
-            s.stable_sha, s.canary_sha, s.canary_weight = s.canary_sha, None, 0
-        elif request.action == "rollback":
+            # Promote the commit this run canaried. If another run's canary has since taken the
+            # slot, leave that canary in place.
+            s.stable_sha = request.sha
+            if s.canary_sha == request.sha:
+                s.canary_sha, s.canary_weight = None, 0
+        elif request.action == "rollback" and s.canary_sha == request.sha:
             s.canary_sha, s.canary_weight, s.canary_fault_until = None, 0, 0.0
         s.history = [*s.history, Deployment(action=request.action, sha=request.sha, run_id=request.run_id, at=now)][
             -MAX_HISTORY:

@@ -116,7 +116,7 @@ export const CRITERIA: CriterionInfo[] = [
 export const RECAP = [
   "A crashed worker cost seconds, not the agent's work.",
   "People approved the plan and the release, on their own schedule.",
-  "Agents worked in parallel, retried through rate limits and stopped at the budget.",
+  "Agents worked in parallel and retried through rate limits, inside a budget the Workflow enforces.",
   "A bad canary was rolled back and reported without anyone paging in.",
   "The pipeline itself changed while work was in flight.",
   "Every step is on the record.",

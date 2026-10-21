@@ -285,3 +285,21 @@ async def test_supervised_autonomy_adds_a_merge_gate(env):
 
     await run_pipeline(env.client, World(), decide=decide, autonomy="supervised")
     assert gates == ["plan", "merge", "production"]
+
+
+async def test_overlapping_canaries_promote_their_own_commits(env):
+    """Two runs in one session: the second canary takes the slot before the first promotes."""
+    from agentic_sdlc.pipeline.environments import DeployRequest, Environments
+
+    task_queue = f"test-{uuid.uuid4().hex[:6]}"
+    async with Worker(env.client, task_queue=task_queue, workflows=[Environments], workflow_runner=workflow_runner()):
+        handle = await env.client.start_workflow(Environments.run, None, id=f"env-{uuid.uuid4().hex[:6]}", task_queue=task_queue)
+        for action, sha, run in [("canary", "aaa", "r1"), ("canary", "bbb", "r2"), ("promote", "aaa", "r1")]:
+            state = await handle.execute_update(Environments.deploy, DeployRequest(action=action, sha=sha, run_id=run))
+        assert (state.stable_sha, state.canary_sha) == ("aaa", "bbb")
+        state = await handle.execute_update(Environments.deploy, DeployRequest(action="promote", sha="bbb", run_id="r2"))
+        assert (state.stable_sha, state.canary_sha) == ("bbb", None)
+        # A late rollback for a canary that's gone changes nothing.
+        state = await handle.execute_update(Environments.deploy, DeployRequest(action="rollback", sha="aaa", run_id="r1"))
+        assert state.stable_sha == "bbb"
+        await handle.terminate()

@@ -10,6 +10,7 @@
 .workers { display: inline-flex; align-items: center; gap: .4rem; font-size: .75rem; color: var(--status); }
 
 .body { min-height: 0; display: grid; grid-template-columns: 17rem minmax(0, 1fr); gap: 1rem; }
+.body.no-rail { grid-template-columns: minmax(0, 1fr); }
 .stage { min-height: 0; min-width: 0; display: grid; }
 
 /* -- Scorecard ------------------------------------------------------------------------- */

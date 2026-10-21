@@ -75,8 +75,8 @@ export function App() {
         </div>
       </header>
 
-      <div className="body">
-        <Scorecard evidence={evidence} temporalUi={config.temporal_ui} />
+      <div className={`body ${act === "proof" ? "no-rail" : ""}`}>
+        {act !== "proof" && <Scorecard evidence={evidence} temporalUi={config.temporal_ui} />}
         <main className="stage">
           {act === "result" && <ResultAct session={session} config={config} onOpenRun={(id) => { setRunId(id); setAct("live"); }} />}
           {act === "why" && <WhyAct />}
