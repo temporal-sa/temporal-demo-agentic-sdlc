@@ -6,7 +6,7 @@ How to present the demo and reset it, written so someone who didn't build it can
 
 A GitHub issue becomes a reviewed, deployed change. A team of AI agents plans it, codes it in parallel, tests it, reviews it and ships it. Temporal keeps that work alive through crashes, hours-long human approvals, flaky APIs and a bad canary, and records every step.
 
-The six decision criteria in the console's left rail are the problems, and each beat below ticks one. A tick only appears when a run recorded the evidence.
+The seven decision criteria in the console's left rail are the problems, and each beat below ticks one. A tick only appears when a run recorded the evidence.
 
 | | Criterion | Beat |
 |---|---|---|
@@ -16,6 +16,7 @@ The six decision criteria in the console's left rail are the problems, and each 
 | D4 | A bad change in production is caught and undone | 7 |
 | D5 | The pipeline can change while runs are in flight | 8 |
 | D6 | Every agent action is auditable | 9 |
+| D7 | People can steer agents mid-flight without starting over | 3, 4b, 6 |
 
 ## Before you start
 
@@ -49,21 +50,25 @@ Keys: **1–6** switch acts, **N** starts a run.
 
 **Do:** press **2**, then **3**.
 
-**The audience sees** three cited figures (coding +30–40% but team productivity under +10%; 84–90% of developers use AI tools but about 13% of teams run it across the lifecycle; the bottleneck moving to review and governance), then the six criteria, each with the pain in someone's words.
+**The audience sees** three cited figures (coding +30–40% but team productivity under +10%; 84–90% of developers use AI tools but about 13% of teams run it across the lifecycle; the bottleneck moving to review and governance), then the seven criteria, each with the pain in someone's words.
 
-**Say:** "Agents across the lifecycle fail the way distributed systems fail. They crash, they wait on people, they run in parallel, they hit rate limits, and they ship bad changes. Those six cards are what you'd need proven before trusting them. Let's prove them."
+**Say:** "Agents across the lifecycle fail the way distributed systems fail. They crash, they wait on people, they run in parallel, they hit rate limits, and they ship bad changes. Those seven cards are what you'd need proven before trusting them. Let's prove them."
 
 **Proof:** every figure links to its source. All the sources are in [docs/story.md](docs/story.md).
 
-### 3. Start a run; a person approves the plan (D2)
+### 3. Start a run; answer the planner; approve the plan (D2, D7)
 
-**Do:** press **4**, click **New run**, pick **Let customers apply the discount code ORBIT10**, leave **Auto merge**, and click **Start the run**.
+**Do:** press **4**, click **New run**, choose **Write my own** and enter something open-ended, such as *"Let customers save items for later"* / *"Customers want to move cart items to a saved-for-later list instead of deleting them."* Leave **Auto merge** and click **Start the run**. (Prepared issues are specific enough that the planner often has no questions; that's fine too.)
 
-**The audience sees** the issue open on GitHub, the planner agent read the repo, and the run stop at the yellow **Approve plan** diamond with the plan and its subtasks.
+**The audience sees** the issue open on GitHub, and the planner agent ask one to three questions, in the console and as a comment on the issue.
 
-**Say:** "The Workflow is parked on a durable wait. No process is holding it open. It could sit here for a weekend and cost nothing." Then click **Approve**.
+**Do:** type an answer and click **Send answers**, or reply on the issue from GitHub (**or reply on GitHub issue ↗**). A GitHub reply shows up in the console within a few seconds.
 
-**Proof:** **Open in Temporal**: a `WorkflowExecutionUpdateAccepted` event for `decide`.
+**The audience sees** the plan, built on the answers, and the run stop at the yellow **Approve plan** diamond. You can **Send back** with feedback, or comment on the issue, and the planner revises it.
+
+**Say:** "The Workflow is parked on a durable wait. No process is holding it open, and while it waits it's reading the issue for replies. It could sit here for a weekend and cost nothing." Then click **Approve**.
+
+**Proof:** **Open in Temporal**: Updates for `decide` and, for a GitHub reply, a `fetch_comments` Activity that returned it. The **Conversation** tab shows each answer and what it became.
 
 ### 4. Kill the worker mid-coding (D1)
 
@@ -74,6 +79,14 @@ Keys: **1–6** switch acts, **N** starts a run.
 **Say:** "Every model call and every tool call is an Activity. What finished is in the agent's Event History, so the new worker continues from the agent's last completed step. And every edit the agent made was already pushed to its branch."
 
 **Proof:** the D1 evidence link opens the run. In the coder's Workflow (`…coder-<subtask>`), the in-flight Activity shows attempt 2, and every earlier model call ran once.
+
+### 4b. Message a coding agent while it works (D7)
+
+**Do:** while a coder is working, type in **Message this agent** on its card, e.g. *"Keep the logic pure and tested, like the rest of cart.js"*, and click **Send**.
+
+**The audience sees** the message queued on the card. When the agent's current turn ends, the message becomes its next turn, and it adjusts the code it already pushed rather than starting over. **D7** ticks.
+
+**Say:** "The agent's earlier work is on its branch and in its history. The message doesn't restart it; it's the next thing it does."
 
 ### 5. Rate limits and parallel agents (D3)
 
@@ -87,11 +100,19 @@ Optionally, click **GitHub 429** in the bottom bar before the PR opens; the pipe
 
 **Proof:** the pending Activity in Temporal shows attempt 2 with the injected failure.
 
-### 6. Review, merge, staging; a person approves production (D2)
+### 6. Review the PR from GitHub; approve production (D2, D7)
 
-**The audience sees** the reviewer agent (a different model family) review the PR, the merge, the staging deploy and its checks. Then the run waits at **Approve prod**.
+**The audience sees** the reviewer agent (a different model family) review the PR, then the **Review window**: "Agents merge in 1:00 unless someone comments."
 
-**Do:** click **Open the change on staging** to show the feature working, then click **Approve**.
+**Do:** open the PR (**PR #N ↗**) and leave a comment on it in GitHub, e.g. *"The button should say 'Move to cart', not just an icon."*
+
+**The audience sees** the comment arrive in the console's **Conversation** tab within a few seconds. The planner triages it as **feedback**, a coding agent changes the PR branch, the tests run, the reviewer looks again, and the pipeline answers on the PR ("Addressed by the coding agent…"). The review window opens again. **D7** ticks.
+
+**Optional, a scope change:** comment *"Also show how many items are saved in the header"*, on GitHub or with **Comment** in the console. The planner triages it as a **scope change**: the PR is closed with an explanation, the plan is revised (revision 2) and needs your approval again, and fresh coders build it on new branches. The issue, the conversation and the earlier work stay.
+
+**Say:** "Developers steer the agents where they already work. Feedback gets fixed on the spot; a new requirement invalidates the plan approval and goes back through planning, without starting the run over."
+
+**Do:** let the window close (or click **Approve and merge**). After staging, click **Open the change on staging**, then **Ship it**. **Stop the release** instead ends the run with production untouched.
 
 ### 7. Break the canary (D4)
 
@@ -322,6 +343,34 @@ await client.workflow_service.set_worker_deployment_current_version(
 
 **Docs:** [Worker Versioning](https://docs.temporal.io/worker-versioning)
 
+### People talk to the agents from the console and from GitHub
+
+**When to use it:** after beat 3 or 6, or when someone asks how a GitHub comment reaches an agent.
+
+**Where it is:** [`agentic_sdlc/pipeline/workflow.py`](https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/main/agentic_sdlc/pipeline/workflow.py): `_wait_for_people`, `_review_window` and `_code_subtask`
+
+```python
+while True:
+    timeout = poll if watching else None
+    try:
+        await workflow.wait_condition(lambda: self._decision is not None or bool(self._inbox), timeout=timeout)
+    except asyncio.TimeoutError:
+        pass
+    if self._decision is None and not self._inbox and watching:
+        await self._read_github(watch_issue, watch_pr, since=start)
+    if self._decision is not None or self._inbox:
+        break
+```
+
+**What you need to understand:**
+
+- A gate waits for either a decision (an Update) or a comment. Console comments arrive as an Update; GitHub comments are read by an Activity every 15 seconds while the gate is open, easing to every minute after ten minutes. A webhook would need a public, unauthenticated URL per workspace; polling works everywhere and costs about 8 Actions a minute only while someone could be commenting.
+- At the review window, the planner triages each comment: **feedback** goes to a coding agent on the PR branch, then the tests and the reviewer run again; a **scope change** closes the PR and the run loops back to planning, keeping the issue and the conversation. Fresh agents build the new revision on new branches.
+- A message to a coder is queued with the Workflow (`steer` Update) and becomes the agent's next turn when its current turn ends; nothing interrupts a model call midway.
+- Everything the pipeline writes on GitHub carries a hidden marker, so the bot never reads its own comments back as feedback even though it posts with the same account's token.
+
+**Docs:** [Message passing](https://docs.temporal.io/develop/python/workflows/message-passing), [Workflow timers](https://docs.temporal.io/develop/python/timers)
+
 ## Reset and tear down
 
 - **Between audiences:** click **Reset session** in the bottom bar. It terminates this browser session's runs, empties its environments, clears faults, and closes its issues and PRs and deletes its branches on GitHub. That cleanup runs as a Standalone Activity on the worker. Other sessions aren't touched.
@@ -335,6 +384,8 @@ await client.workflow_service.set_worker_deployment_current_version(
 | Top right says **no workers** and nothing moves | The worker was killed or crashed | Click **Start a worker**, or check `.logs/worker-v1.log` |
 | A step is pink for a long time with `GitHub 401` or `403` | The GitHub token expired or lost access | [Rotate the GitHub token](#rotate-the-github-token) |
 | A step is pink with `ProviderRejected` | A model name or key is wrong for that provider | Pick another model in **New run**, or check the key in `.env.local` |
+| A GitHub comment doesn't show up | The run isn't at a gate that's listening (questions, plan, review window), or GitHub's API is slow | Comments are read only while one of those gates is open, every 15 s; check the Conversation tab after a few seconds |
+| A message to an agent is refused | That agent's lane has finished, or it has had 3 messages | Message a coder while its lane is active |
 | **Couldn't start the run: You already have 2 runs in progress** | The per-session cap | Let one finish or **Reset session** |
 | The run stops at **Budget** | Estimated spend reached the run's budget | **Raise budget by $3**, or start runs with a higher budget |
 | **Roll out v2** says the version has no pollers | The v2 worker isn't running | Locally see `.logs/worker-v2.log`; in the catalog check the `worker-v2` component |

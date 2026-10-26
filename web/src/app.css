@@ -151,7 +151,7 @@
 .stat-card blockquote { margin: 0; font-size: 1rem; color: var(--indigo-100); }
 .stat-card figcaption { font-size: .75rem; }
 
-.problem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .9rem; }
+.problem-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; }
 .problem { display: grid; gap: .5rem; align-content: start; }
 .problem p { margin: 0; font-size: .9rem; }
 .problem blockquote { margin: 0; font-size: .82rem; color: var(--indigo-100); border-left: 2px solid var(--uv-light); padding-left: .6rem; }
@@ -190,3 +190,22 @@
 @media (prefers-reduced-motion: reduce) {
   .pipeline-graph .node { animation: none !important; }
 }
+
+/* -- Conversation with the agents ---------------------------------------------------------- */
+.questions { margin: 0; padding-left: 1.3rem; display: grid; gap: .35rem; font-size: 1.05rem; }
+.gate-text { font: inherit; font-size: .9rem; color: var(--off-white); background: var(--space-black); border: 1px solid var(--slate-500); padding: .5rem .6rem; resize: vertical; }
+.gate-text:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--green-soft); }
+.review-window { display: grid; gap: .35rem; font-size: .92rem; }
+.review-window strong { color: var(--yellow); }
+.conversation { list-style: none; margin: 0; padding: 0; display: grid; gap: .7rem; overflow: auto; align-content: start; }
+.conversation li { border: 1px solid var(--border); border-left: 2px solid var(--status); padding: .55rem .7rem; display: grid; gap: .35rem; }
+.conversation header { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: .8rem; }
+.conversation blockquote { margin: 0; font-size: .9rem; white-space: pre-wrap; }
+.conversation p { margin: 0; font-size: .78rem; }
+.conversation .outcome { color: var(--green); }
+.source { font-family: var(--font-mono); font-size: .66rem; padding: .1rem .4rem; border: 1px solid var(--slate-500); color: var(--indigo-100); }
+.source.github { border-color: var(--uv-light); }
+.steer { display: flex; gap: .4rem; }
+.steer input { flex: 1; min-width: 0; font: inherit; font-size: .8rem; color: var(--off-white); background: var(--space-black); border: 1px solid var(--slate-500); padding: .3rem .45rem; }
+.steer input:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--green-soft); }
+.queued-steer { margin: 0; font-size: .72rem; color: var(--yellow); }

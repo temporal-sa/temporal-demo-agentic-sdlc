@@ -2,20 +2,21 @@
 // the person the run is waiting for), and the proof: code, storefront and GitHub.
 
 import { useEffect, useMemo, useState } from "react";
-import { ago, api, explainFailure, money, temporalLink, type Config, type Retry, type RunView, type Step } from "../api";
+import { ago, api, explainFailure, money, temporalLink, type Config, type Feedback, type Retry, type RunView, type Step } from "../api";
 import type { AgentFeed } from "../live";
 import { useNow } from "../live";
 import { StepList } from "../kit/StepList";
 import { CodePanel } from "./CodePanel";
-import { GraphLegend, PipelineGraph } from "./PipelineGraph";
+import { GraphLegend, PipelineGraph, hiddenUntilUsed } from "./PipelineGraph";
 import { GitHubPanel, StorefrontPanel } from "./Panels";
 
 const RUN_STATUS_LABEL: Record<string, string> = {
   running: "Running", waiting: "Waiting for a person", completed: "Shipped", rolled_back: "Rolled back",
-  failed: "Failed", cancelled: "Stopped",
+  failed: "Failed", cancelled: "Stopped", stopped: "Stopped before production",
 };
 const RUN_STATUS_VOCAB: Record<string, string> = {
   running: "active", waiting: "waiting", completed: "completed", rolled_back: "completed", failed: "failed", cancelled: "skipped",
+  stopped: "skipped",
 };
 
 /** Which step each retrying Activity belongs to, so the graph and timeline turn pink there. */
@@ -44,13 +45,15 @@ export function RunConsole({ view, feeds, config, onError }: {
     ?? [...run.steps].reverse().find((s) => s.status !== "pending" && s.status !== "skipped" && !s.lane) ?? null;
   const [selected, setSelected] = useState<string | null>(null);
   const focus = selected ?? active?.key ?? null;
-  const [side, setSide] = useState<"code" | "store" | "github">("code");
+  const [side, setSide] = useState<"code" | "talk" | "store" | "github">("code");
+  // When someone says something to the agents, show the conversation.
+  const said = run.conversation.length;
+  useEffect(() => { if (said > 0) setSide("talk"); }, [said]);
 
   // Agent lanes sit under the build step they belong to.
   const ordered = run.steps.flatMap((s) => (s.lane ? [] : s.key === "build" ? [s, ...run.steps.filter((l) => l.lane)] : [s]));
   const timeline = ordered
-    .filter((s) => !(s.status === "pending" && ["rollback", "gate:budget"].includes(s.key)))
-    .filter((s) => !(s.status === "skipped" && ["rollback", "gate:budget"].includes(s.key)))
+    .filter((s) => !hiddenUntilUsed(s))
     .map((s) => toTimelineStep(s, retries.get(s.key), now));
   const noWorker = view.workers.length === 0 && !view.closed;
   const budgetShare = Math.min(1, run.usage.cost_usd / Math.max(0.01, run.budget_usd));
@@ -107,13 +110,14 @@ export function RunConsole({ view, feeds, config, onError }: {
 
         <section className="card side-card">
           <div className="segmented" role="tablist">
-            {(["code", "store", "github"] as const).map((tab) => (
+            {(["code", "talk", "store", "github"] as const).map((tab) => (
               <button key={tab} role="tab" aria-current={side === tab || undefined} onClick={() => setSide(tab)}>
-                {tab === "code" ? "Workflow code" : tab === "store" ? "Storefront" : "GitHub"}
+                {tab === "code" ? "Workflow code" : tab === "talk" ? `Conversation${said ? ` (${said})` : ""}` : tab === "store" ? "Storefront" : "GitHub"}
               </button>
             ))}
           </div>
           {side === "code" && <CodePanel activeStep={focus} status={retries.has(focus ?? "") ? "retrying" : (run.steps.find((s) => s.key === focus)?.status ?? "active")} />}
+          {side === "talk" && <ConversationPanel view={view} />}
           {side === "store" && <StorefrontPanel view={view} />}
           {side === "github" && <GitHubPanel view={view} repo={config.repo} />}
         </section>
@@ -137,6 +141,39 @@ function GitHubLinks({ run, repo }: { run: RunView["run"]; repo: string }) {
   );
 }
 
+const KIND_LABEL: Record<string, string> = {
+  answer: "Answer", plan_feedback: "Plan feedback", feedback: "Feedback", scope_change: "Scope change", steer: "Steering",
+};
+const STATUS_LABEL: Record<string, string> = {
+  received: "Received", working: "Agent working", addressed: "Addressed", replanning: "Re-planning", queued: "Queued",
+};
+
+/** Everything people said to the agents, where they said it, and what the agents did with it. */
+function ConversationPanel({ view }: { view: RunView }) {
+  const items = [...view.run.conversation].reverse();
+  if (items.length === 0) {
+    return <p className="empty muted">Answers, comments and messages to agents appear here, from the console or from GitHub.</p>;
+  }
+  return (
+    <ol className="conversation">
+      {items.map((f) => (
+        <li key={f.id} data-status={f.status === "addressed" ? "completed" : f.status === "queued" ? "waiting" : "active"}>
+          <header>
+            <span className={`source ${f.source}`}>{f.source === "github" ? "GitHub" : "Console"}</span>
+            <strong>{f.source === "github" ? `@${f.author}` : f.author}</strong>
+            {f.kind && <span className={`badge ${f.kind === "scope_change" ? "progress" : "idle"}`}>{KIND_LABEL[f.kind]}</span>}
+            <span className="status-text mono">{STATUS_LABEL[f.status]}</span>
+            {f.url && <a href={f.url} target="_blank" rel="noreferrer" className="mono">↗</a>}
+          </header>
+          <blockquote>{f.text}</blockquote>
+          {f.reason && <p className="muted">Triage: {f.reason}</p>}
+          {f.outcome && <p className="outcome">{f.outcome}</p>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function toTimelineStep(s: Step, retry: Retry | undefined, now: number) {
   const status = retry ? "retrying" : s.status;
   const started = s.started_at;
@@ -150,49 +187,126 @@ function toTimelineStep(s: Step, retry: Retry | undefined, now: number) {
 
 function GateCard({ view, now, onError }: { view: RunView; now: number; onError: (m: string) => void }) {
   const gate = view.run.gate!;
-  const [feedback, setFeedback] = useState("");
-  const [sending, setSending] = useState<"approve" | "reject" | null>(null);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState<string | null>(null);
   const waited = now - gate.waiting_since;
-  const decide = async (approve: boolean) => {
-    setSending(approve ? "approve" : "reject");
+  useEffect(() => { setSending(null); setText(""); }, [gate.key, gate.waiting_since]);
+
+  const send = async (label: string, path: "decide" | "comment", body: object) => {
+    setSending(label);
     try {
-      await api(`/api/runs/${view.run.run_id}/decide`, {
-        json: { gate: gate.key, approve, feedback: feedback || null, raise_budget_usd: gate.key === "budget" ? 3 : null },
-      });
+      await api(`/api/runs/${view.run.run_id}/${path}`, { json: body });
     } catch (e) {
       onError((e as Error).message);
       setSending(null);
     }
   };
-  useEffect(() => setSending(null), [gate.key, gate.waiting_since]);
+  const decide = (label: string, approve: boolean, feedback: string | null = null) =>
+    send(label, "decide", { gate: gate.key, approve, feedback, raise_budget_usd: gate.key === "budget" ? 3 : null });
+  const comment = () => send("comment", "comment", { text });
+  const reply = gate.github_url && (
+    <a className="gh-chip" href={gate.github_url} target="_blank" rel="noreferrer">
+      or reply on GitHub {gate.key === "merge" ? `PR #${gate.github_url.split("/").pop()}` : "issue"} ↗
+    </a>
+  );
+  const busy = !!sending;
 
   return (
     <div className="gate" data-status="waiting">
       <span className="eyebrow">Waiting for a person · {ago(waited)}</span>
       <h3 className="gate-question">{gate.question}</h3>
-      <div className="gate-actions">
-        <button className="button primary green" disabled={!!sending} onClick={() => decide(true)}>
-          {sending === "approve" ? "Approving…" : gate.key === "budget" ? "Raise budget by $3" : "Approve"}
-        </button>
-        <button className="button secondary ultraviolet" disabled={!!sending} onClick={() => decide(false)}>
-          {sending === "reject" ? "Sending…" : gate.key === "plan" ? "Send back" : gate.key === "budget" ? "Stop the run" : "Reject"}
-        </button>
-        {gate.key === "plan" && (
-          <input className="gate-feedback" aria-label="Feedback if you send it back" value={feedback}
-            onChange={(e) => setFeedback(e.target.value)} placeholder="Feedback if you send it back" />
-        )}
-      </div>
+
+      {gate.key === "clarify" && (
+        <>
+          <ol className="questions">{gate.questions.map((q) => <li key={q}>{q}</li>)}</ol>
+          <textarea className="gate-text" rows={3} value={text} onChange={(e) => setText(e.target.value)}
+            placeholder="Answer in a sentence or two" aria-label="Your answers" />
+          <div className="gate-actions">
+            <button className="button primary green" disabled={busy || !text.trim()} onClick={() => decide("answer", true, text)}>
+              {sending === "answer" ? "Sending…" : "Send answers"}
+            </button>
+            <button className="button secondary ultraviolet" disabled={busy} onClick={() => decide("skip", true)}>
+              {sending === "skip" ? "Sending…" : "Use your judgment"}
+            </button>
+            {reply}
+          </div>
+        </>
+      )}
+
+      {gate.key === "plan" && (
+        <>
+          <div className="gate-actions">
+            <button className="button primary green" disabled={busy} onClick={() => decide("approve", true)}>
+              {sending === "approve" ? "Approving…" : "Approve"}
+            </button>
+            <button className="button secondary ultraviolet" disabled={busy} onClick={() => decide("reject", false, text || null)}>
+              {sending === "reject" ? "Sending…" : "Send back"}
+            </button>
+            <input className="gate-feedback" aria-label="Feedback for the planner" value={text}
+              onChange={(e) => setText(e.target.value)} placeholder="Feedback for the planner" />
+            {reply}
+          </div>
+        </>
+      )}
+
+      {gate.key === "merge" && (
+        <>
+          {gate.closes_at && (
+            <ReviewWindow closesAt={gate.closes_at} opened={gate.waiting_since} now={now} />
+          )}
+          <textarea className="gate-text" rows={2} value={text} onChange={(e) => setText(e.target.value)}
+            placeholder="Comment on the change, like a reviewer would" aria-label="Your comment" />
+          <div className="gate-actions">
+            <button className="button primary green" disabled={busy} onClick={() => decide("approve", true)}>
+              {sending === "approve" ? "Merging…" : "Approve and merge"}
+            </button>
+            <button className="button secondary ultraviolet" disabled={busy || !text.trim()} onClick={comment}
+              title="A coding agent addresses feedback; a new requirement sends the run back to planning">
+              {sending === "comment" ? "Sending…" : "Comment"}
+            </button>
+            {reply}
+          </div>
+        </>
+      )}
+
+      {(gate.key === "production" || gate.key === "budget") && (
+        <div className="gate-actions">
+          <button className="button primary green" disabled={busy} onClick={() => decide("approve", true)}>
+            {sending === "approve" ? "Approving…" : gate.key === "budget" ? "Raise budget by $3" : "Ship it"}
+          </button>
+          <button className="button secondary ultraviolet" disabled={busy} onClick={() => decide("reject", false, text || null)}>
+            {sending === "reject" ? "Stopping…" : gate.key === "budget" ? "Stop the run" : "Stop the release"}
+          </button>
+          {gate.key === "production" && (
+            <input className="gate-feedback" aria-label="Why, if you stop it" value={text}
+              onChange={(e) => setText(e.target.value)} placeholder="Why, if you stop it" />
+          )}
+        </div>
+      )}
+
       <p className="gate-explain">
         The Workflow is parked on a durable wait. No process is holding it open: it costs nothing,
         survives restarts and deploys, and could wait like this for days.
+        {gate.github_url && " While it waits it reads new comments on GitHub every few seconds."}
       </p>
       <div className="gate-details">
-        <p className="gate-context">{gate.context}</p>
-          {gate.key === "plan" && view.run.plan && <PlanSummary view={view} />}
+        {gate.context && <p className="gate-context">{gate.context}</p>}
+        {gate.key === "plan" && view.run.plan && <PlanSummary view={view} />}
         {gate.key === "production" && view.environments.staging_sha && (
           <p><a href={`${view.apps}/staging/`} target="_blank" rel="noreferrer">Open the change on staging</a></p>
         )}
       </div>
+    </div>
+  );
+}
+
+function ReviewWindow({ closesAt, opened, now }: { closesAt: number; opened: number; now: number }) {
+  const left = Math.max(0, closesAt - now);
+  const share = Math.min(1, (now - opened) / Math.max(1, closesAt - opened));
+  return (
+    <div className="review-window">
+      <span>Agents merge in <strong className="mono">{Math.floor(left / 60)}:{String(Math.floor(left % 60)).padStart(2, "0")}</strong> unless someone comments.</span>
+      <span className="meter-bar"><span style={{ width: `${share * 100}%` }} data-status="waiting" /></span>
     </div>
   );
 }
@@ -228,7 +342,9 @@ function AgentsPanel({ view, feeds, focus, onError }: { view: RunView; feeds: Re
         {ordered.map((a) => (
           <AgentCard key={a.workflow_id} agentId={a.workflow_id} role={a.role} model={a.model} feed={feeds[a.workflow_id]}
             retry={view.retries.find((r) => r.workflow_id === a.workflow_id)} faults={view.faults[a.workflow_id] ?? []}
-            closed={view.closed} onError={onError} />
+            closed={view.closed} onError={onError} runId={view.run.run_id}
+            lane={a.lane && view.run.steps.some((s) => s.key === `code:${a.lane}` && (s.status === "active" || s.status === "retrying")) ? `code:${a.lane}` : null}
+            queued={view.run.conversation.filter((f) => f.kind === "steer" && f.stage === `code:${a.lane}` && f.status !== "addressed")} />
         ))}
       </div>
     </div>
@@ -237,9 +353,20 @@ function AgentsPanel({ view, feeds, focus, onError }: { view: RunView; feeds: Re
 
 const ROLE_NAME: Record<string, string> = { planner: "Planner", "reviewer-quality": "Code reviewer", "reviewer-security": "Security reviewer", "coder-integration": "Integration coder" };
 
-function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError }: {
-  agentId: string; role: string; model: string; feed?: AgentFeed; retry?: Retry; faults: string[]; closed: boolean; onError: (m: string) => void;
+function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError, runId, lane, queued }: {
+  agentId: string; role: string; model: string; feed?: AgentFeed; retry?: Retry; faults: string[]; closed: boolean;
+  onError: (m: string) => void; runId: string; lane: string | null; queued: Feedback[];
 }) {
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const steer = async () => {
+    setSending(true);
+    try {
+      await api(`/api/runs/${runId}/steer`, { json: { lane, text: message } });
+      setMessage("");
+    } catch (e) { onError((e as Error).message); }
+    finally { setSending(false); }
+  };
   const name = ROLE_NAME[role] ?? (role.startsWith("coder-") ? `Coder · ${role.slice(6)}` : role);
   const status = retry ? "retrying" : feed?.approvals.length ? "waiting" : feed?.thinking || feed?.tools.some((t) => t.status === "running") ? "active" : "completed";
   const injectRateLimit = () => api("/api/faults", { json: { kind: "model_rate_limit", workflow_id: agentId, attempts: 2 } }).catch((e) => onError(e.message));
@@ -278,6 +405,16 @@ function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError 
         ))}
       </ol>
       {feed?.thinking && <p className="reply-tail">{feed.replyTail || "Thinking…"}</p>}
+      {queued.map((q) => (
+        <p key={q.id} className="queued-steer mono">✉ {q.status === "working" ? "Working on" : "Queued for its next turn"}: “{q.text}”</p>
+      ))}
+      {lane && (
+        <form className="steer" onSubmit={(e) => { e.preventDefault(); if (message.trim()) steer(); }}>
+          <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Message this agent"
+            aria-label={`Message ${name}`} />
+          <button className="button small secondary ultraviolet" disabled={sending || !message.trim()}>Send</button>
+        </form>
+      )}
     </article>
   );
 }

@@ -49,6 +49,13 @@ Every run makes real model calls on the shared provider keys.
 - Per-turn request limits on each agent.
 - Runs have a 3-day execution timeout; environments close after 24 hours idle; faults expire in 10 minutes.
 
+## GitHub polling
+
+While a run waits at the questions, plan or review gate, it reads new comments on its issue and PR
+every 15 seconds (every 60 seconds after ten minutes): up to four GitHub API calls and about two
+Actions per poll. Gates are short in a presenter-driven demo, but many sessions parked at gates for
+hours would share the PAT's 5,000 requests an hour; watch `x-ratelimit-remaining` if that happens.
+
 ## Actions estimate
 
 Measured on a real run (free-shipping issue, two coders, the worker killed once mid-build): about

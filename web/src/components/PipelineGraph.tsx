@@ -11,14 +11,14 @@ const LANE_GAP = 40;
 type Kind = "agent" | "person" | "system";
 
 const KIND: Record<string, Kind> = {
-  issue: "system", plan: "agent", "gate:plan": "person", build: "system", pr: "system", review: "agent",
+  issue: "system", clarify: "agent", "gate:clarify": "person", plan: "agent", "gate:plan": "person", feedback: "agent", build: "system", pr: "system", review: "agent",
   security: "agent", "gate:merge": "person", merge: "system", staging: "system", "gate:production": "person",
   canary: "system", rollback: "system", "gate:budget": "person", done: "system",
 };
 
 const SHORT: Record<string, string> = {
-  issue: "Issue", plan: "Plan", "gate:plan": "Approve plan", build: "Fork", pr: "Pull request",
-  review: "Review", security: "Security", "gate:merge": "Approve merge", merge: "Merge", staging: "Staging",
+  issue: "Issue", clarify: "Questions", "gate:clarify": "Answer", plan: "Plan", "gate:plan": "Approve plan", feedback: "Fix", build: "Fork", pr: "Pull request",
+  review: "Review", security: "Security", "gate:merge": "Comments", merge: "Merge", staging: "Staging",
   "gate:production": "Approve prod", canary: "Canary", rollback: "Roll back", "gate:budget": "Budget", done: "Report",
 };
 
@@ -26,8 +26,7 @@ export function PipelineGraph({ run, selected, onSelect, retrying }: {
   run: RunState; selected: string | null; onSelect: (key: string) => void; retrying: Set<string>;
 }) {
   const lanes = run.steps.filter((s) => s.lane && s.key.startsWith("code:"));
-  const main = run.steps.filter((s) => !s.lane && s.key !== "rollback"
-    && !(s.key === "gate:budget" && (s.status === "pending" || s.status === "skipped")));
+  const main = run.steps.filter((s) => !s.lane && s.key !== "rollback" && !hiddenUntilUsed(s));
   const rollback = run.steps.find((s) => s.key === "rollback");
   const showRollback = rollback && rollback.status !== "pending" && rollback.status !== "skipped";
 
@@ -88,6 +87,13 @@ export function PipelineGraph({ run, selected, onSelect, retrying }: {
       ))}
     </svg>
   );
+}
+
+/** Steps that only appear when the run actually takes them. */
+export function hiddenUntilUsed(s: Step): boolean {
+  const unused = s.status === "pending" || s.status === "skipped";
+  if (["gate:budget", "feedback", "rollback"].includes(s.key)) return unused;
+  return s.key === "gate:clarify" && s.status === "skipped";
 }
 
 function Node({ kind, cx, cy, status, selected }: { kind: Kind; cx: number; cy: number; status: string; selected: boolean }) {

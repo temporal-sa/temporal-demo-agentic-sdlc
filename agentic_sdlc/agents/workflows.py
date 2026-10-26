@@ -27,6 +27,11 @@ with workflow.unsafe.imports_passed_through():
     from agentic_sdlc.agents.runtime import CODER, PLANNER, REVIEWER, SECURITY_REVIEWER
     from agentic_sdlc.models import (
         AgentInit,
+        Clarification,
+        ClarifyReply,
+        Triage,
+        TriageReply,
+        TriageRequest,
         Autonomy,
         CodeReply,
         CodeRequest,
@@ -36,6 +41,18 @@ with workflow.unsafe.imports_passed_through():
         ReviewRequest,
         Usage,
     )
+
+CLARIFY_INSTRUCTIONS = """\
+Before planning, decide whether the issue leaves any decision open that would change what gets
+built: placement, wording, edge cases, behaviour on bad input. If so, ask up to three short,
+specific questions a developer can answer in a sentence each. Don't ask about things you can
+decide sensibly yourself or learn from the code. If nothing material is open, ask nothing."""
+
+TRIAGE_INSTRUCTIONS = """\
+Classify the developer's comment against the approved plan. It is feedback when the change can
+be made within the plan and its acceptance criteria (a bug, wording, style, a missed criterion).
+It is a scope change when it adds, removes or changes a requirement the plan didn't cover, so
+the plan has to be re-approved. Don't use any tools."""
 
 # Caps per turn so one runaway agent can't spend the run's budget on its own.
 CODER_LIMITS = UsageLimits(request_limit=40)
@@ -82,11 +99,48 @@ class PlannerAgent(_AgentBase):
         self._setup(config, data)
 
     @agent.accepts
+    async def clarify(self, request: PlanRequest) -> ClarifyReply:
+        """Ask the developer about decisions the issue leaves open, before planning."""
+        result = await PLANNER.run(
+            f"Issue: {request.issue_title}\n\n{request.issue_body}",
+            instructions=CLARIFY_INSTRUCTIONS,
+            output_type=Clarification,
+            deps=self._deps(),
+            message_history=self._history,
+            model=self._init.model.key,
+            model_settings=settings_for(self._init.model),
+            usage_limits=READER_LIMITS,
+        )
+        self._history = result.all_messages()
+        return ClarifyReply(clarification=result.output, usage=usage_of(result, self._init.model.key))
+
+    @agent.accepts
+    async def triage(self, request: TriageRequest) -> TriageReply:
+        """Decide whether a person's comment fits the approved plan or changes its scope."""
+        prompt = (
+            f"Approved plan: {request.plan.summary}\nAcceptance criteria:\n- "
+            + "\n- ".join(request.plan.acceptance_criteria)
+            + f"\n\nComment from a developer on the pull request:\n{request.comment}"
+        )
+        result = await PLANNER.run(
+            prompt,
+            instructions=TRIAGE_INSTRUCTIONS,
+            output_type=Triage,
+            deps=self._deps(),
+            model=self._init.model.key,
+            model_settings=settings_for(self._init.model),
+            usage_limits=UsageLimits(request_limit=3),
+        )
+        return TriageReply(triage=result.output, usage=usage_of(result, self._init.model.key))
+
+    @agent.accepts
     async def plan(self, request: PlanRequest) -> PlanReply:
         """Turn an issue into a plan of one to three parallel subtasks."""
         prompt = f"Issue: {request.issue_title}\n\n{request.issue_body}"
+        if request.clarifications:
+            prompt += f"\n\nThe developer answered your questions:\n{request.clarifications}"
         if request.feedback:
-            prompt += f"\n\nThe reviewer rejected your previous plan. Their feedback:\n{request.feedback}"
+            prompt += f"\n\nRevise your previous plan. The developer's feedback:\n{request.feedback}"
         result = await PLANNER.run(
             prompt,
             deps=self._deps(),

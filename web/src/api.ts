@@ -10,7 +10,15 @@ export interface Step {
   key: string; label: string; status: StepStatus; detail: string; note: string; attempt: number;
   started_at: number | null; ended_at: number | null; lane: string | null; agent_workflow_id: string | null;
 }
-export interface Gate { key: "plan" | "merge" | "production" | "budget"; question: string; context: string; waiting_since: number }
+export interface Gate {
+  key: "clarify" | "plan" | "merge" | "production" | "budget"; question: string; context: string; waiting_since: number;
+  questions: string[]; closes_at: number | null; github_url: string | null;
+}
+export interface Feedback {
+  id: string; source: "console" | "github"; author: string; text: string; url: string | null; at: number; stage: string;
+  kind: "answer" | "plan_feedback" | "feedback" | "scope_change" | "steer" | null; reason: string;
+  status: "received" | "working" | "addressed" | "replanning" | "queued"; outcome: string;
+}
 export interface AgentRef { role: string; workflow_id: string; model: string; lane: string | null }
 export interface Proof { criterion: Criterion; detail: string; at: number }
 export interface Subtask { id: string; title: string; description: string; files: string[] }
@@ -19,10 +27,11 @@ export interface Review { verdict: "approve" | "request_changes"; summary: strin
 
 export interface RunState {
   run_id: string; version: string; title: string;
-  status: "running" | "waiting" | "completed" | "rolled_back" | "failed" | "cancelled";
+  status: "running" | "waiting" | "completed" | "rolled_back" | "failed" | "cancelled" | "stopped";
   steps: Step[]; gate: Gate | null; agents: AgentRef[]; usage: Usage; budget_usd: number;
   issue_url: string | null; pr_url: string | null; revert_pr_url?: string | null; plan: Plan | null; review: Review | null;
   staging_sha: string | null; canary_sha: string | null; proofs: Proof[]; started_at: number; ended_at: number | null;
+  conversation: Feedback[]; plan_revision: number;
 }
 
 export interface Retry { workflow_id: string; activity: string; attempt: number; last_failure: string; next_attempt_in: number | null }
@@ -50,7 +59,7 @@ export interface Config {
   temporal_ui: string; repo: string; local_controls: boolean; task_queue: string;
 }
 
-export type Criterion = "D1" | "D2" | "D3" | "D4" | "D5" | "D6";
+export type Criterion = "D1" | "D2" | "D3" | "D4" | "D5" | "D6" | "D7";
 
 export interface AgentEvent {
   agent_workflow_id: string; offset: number; timestamp: number; type: string;

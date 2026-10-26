@@ -80,7 +80,7 @@ export function HardAct() {
   return (
     <div className="act act-hard">
       <h1 className="display">Agents across the lifecycle fail in the ways distributed systems fail.</h1>
-      <p className="lede">They crash, wait on people, run in parallel, hit rate limits, ship bad changes and change underneath you. These are the six things to prove before you trust them.</p>
+      <p className="lede">They crash, wait on people, run in parallel, hit rate limits, ship bad changes, change underneath you, and need steering. These are the seven things to prove before you trust them.</p>
       <div className="problem-grid">
         {CRITERIA.map((c) => (
           <article key={c.id} className="card problem">

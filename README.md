@@ -4,6 +4,7 @@ AI agents take a real GitHub issue to a canaried production deploy. They plan it
 
 - **Agents are Workflows.** Each planner, coder and reviewer is a [temporal-agent-harness](https://github.com/temporal-sa/temporal-agent-harness) agent running [Pydantic AI](https://ai.pydantic.dev/durable_execution/temporal/) on Anthropic, OpenAI or Gemini. Every model call and tool call is an [Activity](https://docs.temporal.io/activities), so a crash loses nothing that already finished.
 - **The pipeline is one Workflow** ([`pipeline/workflow.py`](agentic_sdlc/pipeline/workflow.py)) that reads top to bottom as the lifecycle. It starts agents as [Child Workflows](https://docs.temporal.io/child-workflows), with one coder per subtask in parallel.
+- **People steer the agents, in the console or on GitHub.** The planner asks about anything the issue leaves open. Comments on the issue and the PR reach the agents: feedback is fixed on the PR branch and re-reviewed, a new requirement sends the run back to planning, and a message to a coder becomes its next turn.
 - **People approve the plan and the release** through [Workflow Updates](https://docs.temporal.io/develop/python/workflows/message-passing). The run waits on a durable wait, at no cost, for as long as it takes.
 - **Retries come from [Retry Policies](https://docs.temporal.io/encyclopedia/retry-policies),** including GitHub's `Retry-After`. A per-run budget is enforced by the Workflow before every agent turn.
 - **The canary bakes on a durable timer.** If its checks fail, a saga stops the traffic, reverts the merge through a PR and reopens the issue.
@@ -48,10 +49,10 @@ flowchart LR
 
 1. The presenter picks an issue (or writes one) and a model for each role. The web server starts an `IssueToProduction` Workflow.
 2. The pipeline opens the issue on [temporal-sa/agentic-sdlc-storefront](https://github.com/temporal-sa/agentic-sdlc-storefront) and creates the run's branches from the `baseline` tag.
-3. The planner agent reads the repo and proposes one to three subtasks. The run then waits for a person to approve the plan.
+3. The planner agent asks about anything the issue leaves open (answer in the console or on the issue), then proposes one to three subtasks. The run waits for a person to approve the plan; comments on the issue revise it.
 4. One coding agent per subtask works on its own branch. Every edit is committed and pushed, so the branch is the durable workspace. The pipeline runs the tests itself and sends failures back to the agent.
-5. Branches merge into a PR. A reviewer agent, by default on a different model family, reviews it, and one round of fixes follows if it asks for changes.
-6. The PR merges, is deployed to staging and checked, then waits for production approval.
+5. Branches merge into a PR. A reviewer agent, by default on a different model family, reviews it, and one round of fixes follows if it asks for changes. Then the review window opens: people comment in the console or on the PR, and the planner triages each comment as feedback (a coder fixes it, the reviewer looks again) or a scope change (the PR closes and the run re-plans). On auto merge the window closes after a quiet minute.
+6. The PR merges, is deployed to staging and checked, then waits for production approval. Stopping the release there leaves production untouched.
 7. The canary takes 20% of production traffic for 90 seconds of checks. It's then promoted, or rolled back by the saga.
 8. The pipeline reports back on the issue with tokens, estimated cost and a pointer to the Workflow.
 

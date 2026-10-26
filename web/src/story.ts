@@ -111,6 +111,13 @@ export const CRITERIA: CriterionInfo[] = [
     beat: "Open the run in Temporal: every model call, tool call, approval and retry, in order.",
     temporal: "Event History",
   },
+  {
+    id: "D7",
+    title: "People can steer agents mid-flight without starting over",
+    problem: "An approve-or-reject button makes a person a gatekeeper. Developers need to redirect agents where they already work, and a new requirement mustn't mean starting from scratch.",
+    beat: "Answer the planner's questions, message a coder while it works, comment on the PR from GitHub. Feedback is fixed on the spot; a new requirement sends the run back to planning.",
+    temporal: "Updates and durable waits that read GitHub; the Workflow routes each comment to the right agent",
+  },
 ];
 
 export const RECAP = [
@@ -119,5 +126,6 @@ export const RECAP = [
   "Agents worked in parallel and retried through rate limits, inside a budget the Workflow enforces.",
   "A bad canary was rolled back and reported without anyone paging in.",
   "The pipeline itself changed while work was in flight.",
+  "Developers steered the agents from the console and from GitHub, and nobody had to start over.",
   "Every step is on the record.",
 ];

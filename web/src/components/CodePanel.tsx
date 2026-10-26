@@ -4,15 +4,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const CALL_FOR_STEP: Record<string, string> = {
-  issue: "_open_issue", plan: "_plan", "gate:plan": "_plan", build: "_build", pr: "_open_pull_request",
-  review: "_review", security: "_review", "gate:merge": "_merge", merge: "_merge", staging: "_deploy_to_staging",
+  issue: "_open_issue", clarify: "_clarify", "gate:clarify": "_clarify", feedback: "_review_window", plan: "_plan", "gate:plan": "_plan", build: "_build", pr: "_open_pull_request",
+  review: "_review", security: "_review", "gate:merge": "_review_window", merge: "_merge", staging: "_deploy_to_staging",
   "gate:production": "_gate(\"production\"", canary: "_canary", rollback: "_canary", done: "_finish",
   "gate:budget": "_turn",
 };
 
 const METHOD_FOR_STEP: Record<string, string> = {
-  issue: "_open_issue", plan: "_plan", "gate:plan": "_gate", build: "_build", pr: "_open_pull_request",
-  review: "_review", security: "_review", "gate:merge": "_gate", merge: "_merge", staging: "_deploy_to_staging",
+  issue: "_open_issue", clarify: "_clarify", "gate:clarify": "_wait_for_people", feedback: "_address_feedback",
+  plan: "_plan", "gate:plan": "_wait_for_people", build: "_build", pr: "_open_pull_request",
+  review: "_review", security: "_review", "gate:merge": "_review_window", merge: "_merge", staging: "_deploy_to_staging",
   "gate:production": "_gate", canary: "_canary", rollback: "_roll_back", done: "_finish", "gate:budget": "_ensure_budget",
 };
 

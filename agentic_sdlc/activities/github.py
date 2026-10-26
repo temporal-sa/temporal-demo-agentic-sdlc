@@ -22,6 +22,9 @@ from agentic_sdlc.agents import tools as git_tools
 from agentic_sdlc.models import Review, Workspace
 
 API = "https://api.github.com"
+# Everything the pipeline writes on GitHub carries this marker, so reading comments back can
+# tell people from the bot even though both post with the same token's account.
+BOT_MARKER = "<!-- agentic-sdlc-bot -->"
 
 
 class RunRepo(BaseModel):
@@ -94,6 +97,28 @@ class ReviewInput(BaseModel):
     review: Review
 
 
+class CommentsInput(BaseModel):
+    repo: str
+    issue: int | None = None
+    pull: int | None = None
+    since: str  # ISO 8601; only comments created after this
+
+
+class HumanComment(BaseModel):
+    id: str
+    number: int
+    author: str
+    body: str
+    url: str
+    created_at: str
+
+
+class ClosePrInput(BaseModel):
+    repo: str
+    pr_number: int
+    comment: str
+
+
 class MergePrInput(BaseModel):
     repo: str
     pr_number: int
@@ -123,7 +148,7 @@ class GitHubActivities:
         return [
             self.prepare_run, self.create_branches, self.comment_on_issue, self.merge_branches,
             self.open_pull_request, self.get_diff, self.post_review, self.merge_pull_request,
-            self.revert_merge, self.cleanup_runs,
+            self.revert_merge, self.cleanup_runs, self.fetch_comments, self.close_pull_request,
         ]
 
     @activity.defn
@@ -155,11 +180,11 @@ class GitHubActivities:
     async def comment_on_issue(self, input: CommentInput) -> None:
         await _maybe_inject_rate_limit()
         path = f"/repos/{input.repo}/issues/{input.issue_number}"
-        # A retry after a successful post would comment twice; skip if this exact body is the
-        # issue's latest comment.
-        comments = await self._get(f"{path}/comments?per_page=100")
-        if not any(c["body"] == input.body for c in comments[-5:]):
-            await self._post(f"{path}/comments", {"body": input.body})
+        body = _bot(input.body)
+        # A retry after a successful post would comment twice; skip if this exact body is already there.
+        comments = await self._get(f"{path}/comments?per_page=100&sort=created&direction=desc")
+        if not any(c["body"] == body for c in comments):
+            await self._post(f"{path}/comments", {"body": body})
         if input.labels:
             await self._post(f"{path}/labels", {"labels": input.labels})
         if input.reopen or input.close:
@@ -191,7 +216,7 @@ class GitHubActivities:
         existing = await self._get(f"/repos/{input.repo}/pulls?state=open&head={owner}:{input.head}")
         pr = existing[0] if existing else await self._post(
             f"/repos/{input.repo}/pulls",
-            {"title": input.title, "head": input.head, "base": input.base, "body": input.body},
+            {"title": input.title, "head": input.head, "base": input.base, "body": _bot(input.body)},
         )
         return PullRequest(number=pr["number"], url=pr["html_url"], head_sha=pr["head"]["sha"])
 
@@ -213,7 +238,7 @@ class GitHubActivities:
         verdict = "✅ Approve" if input.review.verdict == "approve" else "🔁 Changes requested"
         lines = [f"**{input.reviewer}**: {verdict}", "", input.review.summary]
         lines += [f"- `{c.file}`: {c.comment}" for c in input.review.comments]
-        body = "\n".join(lines)
+        body = _bot("\n".join(lines))
         reviews = await self._get(f"/repos/{input.repo}/pulls/{input.pr_number}/reviews")
         if not any(r.get("body") == body for r in reviews):
             await self._post(f"/repos/{input.repo}/pulls/{input.pr_number}/reviews", {"body": body, "event": "COMMENT"})
@@ -250,6 +275,29 @@ class GitHubActivities:
         ))
         await self.merge_pull_request(MergePrInput(repo=input.repo, pr_number=pr.number, title=input.title))
         return pr
+
+    @activity.defn
+    async def fetch_comments(self, input: CommentsInput) -> list[HumanComment]:
+        """Comments people left on the issue or the pull request since a time: conversation
+        comments, review summaries and inline review comments. The bot's own are skipped."""
+        found: list[HumanComment] = []
+        # A PR's conversation comments live on its issue, so both numbers use the issues API.
+        for number in (n for n in (input.issue, input.pull) if n):
+            for c in await self._get(f"/repos/{input.repo}/issues/{number}/comments?since={input.since}&per_page=100"):
+                found.append(_human(c, number, "issue"))
+        if input.pull:
+            for c in await self._get(f"/repos/{input.repo}/pulls/{input.pull}/comments?since={input.since}&per_page=100"):
+                found.append(_human(c, input.pull, "review-comment", file=c.get("path")))
+            for r in await self._get(f"/repos/{input.repo}/pulls/{input.pull}/reviews?per_page=100"):
+                if r.get("body") and (r.get("submitted_at") or "") > input.since:
+                    found.append(_human({**r, "created_at": r["submitted_at"]}, input.pull, "review"))
+        people = [c for c in found if c.body.strip() and BOT_MARKER not in c.body and c.created_at > input.since]
+        return sorted(people, key=lambda c: c.created_at)
+
+    @activity.defn
+    async def close_pull_request(self, input: ClosePrInput) -> None:
+        await self.comment_on_issue(CommentInput(repo=input.repo, issue_number=input.pr_number, body=input.comment))
+        await self._request("PATCH", f"/repos/{input.repo}/pulls/{input.pr_number}", {"state": "closed"})
 
     @activity.defn
     async def cleanup_runs(self, input: CleanupInput) -> int:
@@ -310,6 +358,18 @@ class GitHubActivities:
                 type="GitHubRejected", non_retryable=True,
             )
         return response
+
+
+def _bot(body: str) -> str:
+    return body if BOT_MARKER in body else f"{body}\n\n{BOT_MARKER}"
+
+
+def _human(raw: dict, number: int, kind: str, *, file: str | None = None) -> HumanComment:
+    body = raw.get("body") or ""
+    if file:
+        body = f"(on {file}) {body}"
+    return HumanComment(id=f"{kind}:{raw['id']}", number=number, author=(raw.get("user") or {}).get("login", "someone"),
+                        body=body[:4000], url=raw.get("html_url", ""), created_at=raw.get("created_at", ""))
 
 
 def _marker(run_id: str) -> str:

@@ -83,8 +83,8 @@ export function NewRunDialog({ config, onClose, onStarted }: {
               <button aria-current={autonomy === "supervised" || undefined} onClick={() => setAutonomy("supervised")}>Supervised</button>
             </div>
             <small className="muted">{autonomy === "auto"
-              ? "Agents merge after an approving review. You still approve the plan and production."
-              : "You also approve the merge, and every shell command an agent wants to run."}</small>
+              ? "After an approving review, agents merge unless someone comments within a minute. You still approve the plan and production."
+              : "The PR waits for your approval, and you approve every shell command an agent wants to run."}</small>
           </div>
           <label className="field">
             <span>Budget for this run (USD)</span>

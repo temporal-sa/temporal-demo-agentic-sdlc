@@ -319,13 +319,14 @@ Thursday night she goes home. What do you think she finds on Friday morning?
         ("04", "A change that passed review broke checkout in production.", "Nobody noticed until customers did."),
         ("05", "Someone changed the agent prompts at midnight.", "Runs already in flight picked them up halfway."),
         ("06", "“Which agent did this?”", "No record of what each agent did, or why."),
+        ("07", "Maya's review comment on the PR went unanswered.", "The only choices were merge it or start over."),
     ]
     for i, (n, what, cost) in enumerate(rows):
-        y = int((1.3 + i * 0.6) * IN)
-        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.5 * IN), fill=CARD, edge=None)
-        d.box(s, int(0.45 * IN), y, int(0.05 * IN), int(0.5 * IN), fill=YELLOW, edge=None)
-        d.text(s, int(0.65 * IN), y, int(0.5 * IN), int(0.5 * IN), n, size=14, color=YELLOW, bold=True, anchor=MSO_ANCHOR.MIDDLE)
-        d.text(s, int(1.2 * IN), y + int(0.06 * IN), int(7.7 * IN), int(0.42 * IN),
+        y = int((1.25 + i * 0.53) * IN)
+        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.45 * IN), fill=CARD, edge=None)
+        d.box(s, int(0.45 * IN), y, int(0.05 * IN), int(0.45 * IN), fill=YELLOW, edge=None)
+        d.text(s, int(0.65 * IN), y, int(0.5 * IN), int(0.45 * IN), n, size=14, color=YELLOW, bold=True, anchor=MSO_ANCHOR.MIDDLE)
+        d.text(s, int(1.2 * IN), y + int(0.03 * IN), int(7.7 * IN), int(0.42 * IN),
                [[(what + " ", {"bold": True, "size": 11}), (cost, {"size": 11, "color": INDIGO})]], anchor=MSO_ANCHOR.MIDDLE)
     d.notes(s, """
 Every kind of failure happened once.
@@ -333,6 +334,7 @@ The agent on the biggest issue crashed at two in the morning. The cron job retri
 The plan approval sat in Slack for six hours; the script waiting for it timed out.
 Four agents hit a rate limit together. Four times the burn, and all of them stalled.
 A change that passed review broke checkout in production.
+And when Maya left a comment on a PR, nothing read it. Her only choices were to merge it anyway or throw the work away and start again.
 Someone changed the prompts at midnight, and runs in flight picked it up halfway.
 And on Friday morning, nobody could say which agent did what.
 These aren't AI problems. They're distributed systems problems.
@@ -394,7 +396,7 @@ The job queue, the state table, the cron job and the Slack bot are gone. That's 
 
     # 12. Decision criteria
     s = d.slide()
-    d.headline(s, "Six things to prove before agents ship your code.")
+    d.headline(s, "Seven things to prove before agents ship your code.")
     criteria = [
         ("D1", "An agent crash loses no work and re-spends no tokens", "Kill the worker mid-turn"),
         ("D2", "Humans stay accountable without babysitting", "Approve the plan and the release"),
@@ -402,17 +404,18 @@ The job queue, the state table, the cron job and the Slack bot are gone. That's 
         ("D4", "A bad change in production is caught and undone", "Break the canary"),
         ("D5", "The pipeline can change while runs are in flight", "Roll out v2 mid-run"),
         ("D6", "Every agent action is auditable", "Open the Event History"),
+        ("D7", "People can steer agents without starting over", "Comment on the PR in GitHub"),
     ]
     d.text(s, int(1.15 * IN), int(1.25 * IN), int(5 * IN), int(0.3 * IN), "What you need proven", size=9, color=MUTED, font=MONO)
     d.text(s, int(6.3 * IN), int(1.25 * IN), int(3 * IN), int(0.3 * IN), "What you'll see live", size=9, color=MUTED, font=MONO)
     for i, (cid, need, see) in enumerate(criteria):
-        y = int((1.55 + i * 0.55) * IN)
-        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.47 * IN), fill=CARD, edge=None)
-        d.text(s, int(0.6 * IN), y, int(0.5 * IN), int(0.47 * IN), cid, size=11, color=K_KEYWORD, font=MONO, anchor=MSO_ANCHOR.MIDDLE)
-        d.text(s, int(1.15 * IN), y, int(5.0 * IN), int(0.47 * IN), need, size=12, anchor=MSO_ANCHOR.MIDDLE, light=True)
-        d.text(s, int(6.3 * IN), y, int(2.7 * IN), int(0.47 * IN), see, size=11, color=INDIGO, anchor=MSO_ANCHOR.MIDDLE)
+        y = int((1.5 + i * 0.5) * IN)
+        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.43 * IN), fill=CARD, edge=None)
+        d.text(s, int(0.6 * IN), y, int(0.5 * IN), int(0.43 * IN), cid, size=11, color=K_KEYWORD, font=MONO, anchor=MSO_ANCHOR.MIDDLE)
+        d.text(s, int(1.15 * IN), y, int(5.0 * IN), int(0.43 * IN), need, size=12, anchor=MSO_ANCHOR.MIDDLE, light=True)
+        d.text(s, int(6.3 * IN), y, int(2.7 * IN), int(0.43 * IN), see, size=11, color=INDIGO, anchor=MSO_ANCHOR.MIDDLE)
     d.notes(s, """
-So let's be specific. If you were going to let agents ship your software, these are the six things you'd want proven. Each one is one of Maya's failures.
+So let's be specific. If you were going to let agents ship your software, these are the seven things you'd want proven. Each one is one of Maya's failures.
 I'll show every one of them live, and the console keeps score: a criterion only ticks when the system recorded the evidence.
 """)
 
@@ -421,13 +424,16 @@ I'll show every one of them live, and the console keeps score: a criterion only 
     d.box(s, int(3.0 * IN), int(2.05 * IN), int(4.0 * IN), int(1.05 * IN), fill=RGBColor(0x14, 0x14, 0x14), edge=GREEN, shape=MSO_SHAPE.ROUNDED_RECTANGLE, width=1.5)
     d.text(s, int(3.0 * IN), int(2.05 * IN), int(4.0 * IN), int(1.05 * IN), "Demo time", size=32, bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
     d.notes(s, """
-Do: switch to the console, press 4, click New run, pick the discount code issue, Start the run.
+Do: switch to the console, press 4, click New run, write an open-ended issue (e.g. "Let customers save items for later"), Start the run.
+Do: when the planner asks its questions, answer them in the console, or reply on the GitHub issue to show it reads GitHub.
 Watch the graph across the top: that's the Workflow. Circles are agents, diamonds are people, squares are the system.
 Do: when it stops at Approve plan, read the plan out, then click Approve.
 Do: while the two coders are working, click Kill the worker. Point at the yellow banner. Click Start a worker.
 Watch the coder cards pick up where they stopped; the token count doesn't reset.
 Do: click Inject 429 on one coder. Watch that lane turn pink and retry while the other keeps going.
-Do: at Approve prod, open staging, then Approve. While the canary bakes, click Break the canary.
+Do: type a message to one coder on its card while it works. Watch it become the agent's next turn.
+Do: at the review window, comment on the PR in GitHub. Watch it arrive in the Conversation tab, get triaged as feedback, fixed and re-reviewed, with a reply on the PR.
+Do: at Approve prod, open staging, then Ship it. While the canary bakes, click Break the canary.
 Watch the rollback branch appear, the revert PR open, and the issue reopen.
 Do: press 5, Roll out v2 during a second run. Then press 6 for the scorecard.
 """)
@@ -458,6 +464,10 @@ Do: press 5, Roll out v2 during a second run. Then press 6 for the scorecard.
          "Every model call, tool call, approval, retry and compensation is in Event History, in order, with inputs and outputs.",
          "Event History",
          "That's the audit trail Maya didn't have on Friday morning, and nobody had to build it."),
+        ("D7", "Developers steered the agents, and nobody started over.", "d7-conversation.jpg",
+         "The planner asked questions before planning. A message reached a coder mid-task. A comment on the PR in GitHub was fixed and re-reviewed; a new requirement sent the run back to planning.",
+         "Updates · durable waits that read GitHub · the Workflow routes each comment to the right agent",
+         "People aren't just approvers here. They answer the planner, message a coder, and comment on the PR where they already work. Feedback gets fixed on the spot; a new requirement voids the plan approval and goes back through planning, and nothing that already happened is lost."),
     ]
     for cid, claim, img, what, feature, note in beats:
         s = d.slide()
@@ -546,17 +556,18 @@ What isn't here is just as important: no job queue, no state table, no retry loo
         "Agents worked in parallel and retried through rate limits, inside a budget.",
         "A bad canary was rolled back and reported without anyone paging in.",
         "The pipeline changed while work was in flight.",
+        "Developers steered the agents from GitHub, and nobody started over.",
         "Every step is on the record.",
     ]
     for i, line in enumerate(recap):
-        y = int((1.35 + i * 0.52) * IN)
+        y = int((1.3 + i * 0.46) * IN)
         d.text(s, int(0.5 * IN), y, int(0.5 * IN), int(0.45 * IN), str(i + 1), size=18, color=GREEN, light=True)
         d.text(s, int(1.0 * IN), y + int(0.05 * IN), int(8.0 * IN), int(0.45 * IN), line, size=15, light=True)
     d.text(s, int(0.5 * IN), int(4.55 * IN), int(8.6 * IN), int(0.4 * IN),
            "Replace “storefront issue” with your migration backlog, your dependency upgrades, your incident follow-ups.", size=11, color=INDIGO)
     d.notes(s, """
 So here's Maya's Friday morning with Temporal underneath.
-Read the six lines.
+Read the seven lines.
 And replace storefront issue with whatever you'd give agents first: a migration backlog, dependency upgrades, incident follow-ups. The shape is the same.
 """)
 

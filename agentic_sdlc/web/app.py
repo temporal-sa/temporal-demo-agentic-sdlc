@@ -32,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.client import Client, WorkflowExecutionStatus, WorkflowUpdateFailedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_client import AgentClient
@@ -419,15 +419,43 @@ class Decide(BaseModel):
 
 @app.post("/api/runs/{run_id}/decide")
 async def decide(run_id: str, body: Decide, owner_key: Owner):
-    workflow_id = run_workflow_id(owner_key, run_id)
     decision = GateDecision(approve=body.approve, feedback=body.feedback, raise_budget_usd=body.raise_budget_usd)
+    return await _update_run(owner_key, run_id, "decide", {"gate": body.gate, "decision": decision.model_dump()})
+
+
+class Comment(BaseModel):
+    text: str
+
+
+@app.post("/api/runs/{run_id}/comment")
+async def comment(run_id: str, body: Comment, owner_key: Owner):
+    """A comment from the console, handled exactly like one left on the issue or the PR."""
+    return await _update_run(owner_key, run_id, "comment", {"text": body.text[:4000], "author": "presenter"})
+
+
+class Steer(BaseModel):
+    lane: str
+    text: str
+
+
+@app.post("/api/runs/{run_id}/steer")
+async def steer(run_id: str, body: Steer, owner_key: Owner):
+    """A message for one coding agent, given to it when its current turn ends."""
+    return await _update_run(owner_key, run_id, "steer", {"lane": body.lane, "text": body.text[:4000], "author": "presenter"})
+
+
+async def _update_run(owner_key: str, run_id: str, update: str, arg: dict) -> dict:
+    """Send an Update to the run and return the state it reports. The Workflow's validator
+    rejects anything that doesn't fit the run's current state; that comes back as a 409 with
+    the validator's own explanation."""
+    workflow_id = run_workflow_id(owner_key, run_id)
     try:
         run = await state.temporal.get_workflow_handle(workflow_id).execute_update(
-            "decide", {"gate": body.gate, "decision": decision.model_dump()}, result_type=RunState,
-            rpc_timeout=timedelta(seconds=10),
-        )
-    except Exception as err:  # noqa: BLE001 - a validator rejection (stale gate) is a 409
-        raise HTTPException(409, f"Couldn't record that decision: {err}") from err
+            update, arg, result_type=RunState, rpc_timeout=timedelta(seconds=10))
+    except WorkflowUpdateFailedError as err:
+        raise HTTPException(409, getattr(err.cause, "message", None) or str(err)) from err
+    except RPCError as err:
+        raise HTTPException(409, err.message) from err
     state.view_cache.pop(workflow_id, None)
     return {"run": run.model_dump(mode="json")}
 

@@ -33,6 +33,17 @@ Google Jules, Devin, Cursor background agents and Factory, plus spec-driven deve
 GitHub Spec Kit). This demo positions Temporal as the orchestration layer under any of them,
 not as another coding agent.
 
+## Delegate-and-review, with people in the loop
+
+Comparison guides split agentic coding tools into *delegate-and-review* (Devin, Jules, Codex,
+Factory: hand over an issue, get back a PR) and *in-the-loop* (Cursor, Copilot, Claude Code: a
+developer steers as the agent works). An agentic SDLC needs both: the long, unattended
+issue-to-production loop, and developers steering it where they already work. This demo runs the
+full loop and keeps people in it as collaborators, not only approvers: the planner asks questions,
+developers comment on the PR in GitHub or message a coder mid-task, and the Workflow routes each
+comment to the right agent. Feedback is fixed on the spot; a new requirement voids the plan
+approval and goes back through planning, without starting the run over.
+
 ## Identify pain (in their words)
 
 | Pain | Their words | Source |
@@ -55,6 +66,7 @@ not as another coding agent.
 | D4 | A bad change in production is caught and undone | "Break the canary" makes its assets fail | The pipeline stops canary traffic, reverts the merge through a PR and reopens the issue | Compensation steps in history; the revert PR | Durable timers; saga |
 | D5 | The pipeline can change while runs are in flight | Roll out v2 (adds a security-review agent) mid-run | The running run finishes on v1; new runs show the new stage | Each run's pinned version | Worker Versioning, Pinned |
 | D6 | Every agent action is auditable | Shown throughout | | Open any run in Temporal | Event History |
+| D7 | People can steer agents mid-flight without starting over | The planner asks questions; a developer comments on the PR on GitHub, or messages a coder mid-task | Answers go into the plan; feedback is fixed on the PR branch and re-reviewed; a new requirement closes the PR and re-plans; a message becomes the coder's next turn | The Conversation tab; the agent's reply on the PR; the Updates and `fetch_comments` Activities in history | Updates; durable waits that read GitHub |
 
 ## Metrics
 
@@ -77,7 +89,7 @@ model cost (from the genai-prices database, not a provider bill), attempts and t
 
 1. **The result.** A run that shipped before the talk: the storefront change is live.
 2. **Why agentic SDLC.** Coding got faster; shipping didn't.
-3. **Why it's hard.** The six criteria, each with the pain in someone's words.
+3. **Why it's hard.** The seven criteria, each with the pain in someone's words.
 4. **Live run.** D1 → D2 → D3 → D4 on a fresh issue.
 5. **Change the pipeline.** D5.
 6. **Proof.** The scorecard, each tick linked to the Workflow that shows it.

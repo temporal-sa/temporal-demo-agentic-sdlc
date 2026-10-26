@@ -98,7 +98,47 @@ class PlanRequest(BaseModel):
 
     issue_title: str
     issue_body: str
+    clarifications: str | None = Field(default=None, description="The developer's answers to your questions.")
     feedback: str | None = None
+
+
+class Clarification(BaseModel):
+    """Questions the planner needs answered before it can plan well."""
+
+    questions: list[str] = Field(
+        description="Zero to three short questions about decisions the issue leaves open. Empty if nothing material is open."
+    )
+
+
+class ClarifyReply(BaseModel):
+    """The planner's questions and what they cost to ask."""
+
+    clarification: Clarification
+    usage: Usage = Field(default_factory=Usage)
+
+
+class Triage(BaseModel):
+    """Whether a person's comment on the work fits the approved plan or changes it."""
+
+    kind: Literal["feedback", "scope_change"] = Field(
+        description="feedback: can be addressed within the approved plan and acceptance criteria. "
+        "scope_change: adds, removes or changes a requirement, so the plan needs re-approval."
+    )
+    reason: str = Field(description="One sentence explaining the classification, addressed to the commenter.")
+
+
+class TriageRequest(BaseModel):
+    """Classify a comment against the approved plan."""
+
+    plan: Plan
+    comment: str
+
+
+class TriageReply(BaseModel):
+    """The classification and what it cost."""
+
+    triage: Triage
+    usage: Usage = Field(default_factory=Usage)
 
 
 class PlanReply(BaseModel):
@@ -173,10 +213,31 @@ class Step(BaseModel):
 
 
 class Gate(BaseModel):
-    key: Literal["plan", "merge", "production", "budget"]
+    key: Literal["clarify", "plan", "merge", "production", "budget"]
     question: str
     context: str = ""
     waiting_since: float
+    questions: list[str] = Field(default_factory=list)  # the planner's, at the clarify gate
+    # When the gate decides by itself if nobody speaks up (the auto-merge review window).
+    closes_at: float | None = None
+    # Where people can also answer on GitHub.
+    github_url: str | None = None
+
+
+class Feedback(BaseModel):
+    """Something a person said to the agents, from the console or GitHub, and what became of it."""
+
+    id: str
+    source: Literal["console", "github"]
+    author: str
+    text: str
+    url: str | None = None
+    at: float
+    stage: str  # the gate or lane it arrived at
+    kind: Literal["answer", "plan_feedback", "feedback", "scope_change", "steer"] | None = None
+    reason: str = ""
+    status: Literal["received", "working", "addressed", "replanning", "queued"] = "received"
+    outcome: str = ""
 
 
 class AgentRef(BaseModel):
@@ -189,7 +250,7 @@ class AgentRef(BaseModel):
 class Proof(BaseModel):
     """Evidence that a decision criterion was shown live, for the scorecard."""
 
-    criterion: Literal["D1", "D2", "D3", "D4", "D5", "D6"]
+    criterion: Literal["D1", "D2", "D3", "D4", "D5", "D6", "D7"]
     detail: str
     at: float
 
@@ -198,7 +259,7 @@ class RunState(BaseModel):
     run_id: str
     version: str
     title: str
-    status: Literal["running", "waiting", "completed", "rolled_back", "failed", "cancelled"] = "running"
+    status: Literal["running", "waiting", "completed", "rolled_back", "failed", "cancelled", "stopped"] = "running"
     steps: list[Step] = Field(default_factory=list)
     gate: Gate | None = None
     agents: list[AgentRef] = Field(default_factory=list)
@@ -212,6 +273,8 @@ class RunState(BaseModel):
     staging_sha: str | None = None
     canary_sha: str | None = None
     proofs: list[Proof] = Field(default_factory=list)
+    conversation: list[Feedback] = Field(default_factory=list)
+    plan_revision: int = 1
     started_at: float = 0.0
     ended_at: float | None = None
 
@@ -226,6 +289,9 @@ class RunRequest(BaseModel):
     budget_usd: float = 3.0
     canary_bake_seconds: int = 90
     canary_check_seconds: int = 15
+    # Auto merge waits this long after an approving review, so people can still comment on the PR.
+    review_window_seconds: int = 60
+    github_poll_seconds: int = 15
 
 
 class GateDecision(BaseModel):
