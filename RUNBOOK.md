@@ -59,11 +59,15 @@ Keys: **1–6** switch acts, **N** starts a scenario.
 
 ### 3. A dependency bump breaks the build; an agent fixes it (D1, D3, D6)
 
-**Do:** press **4**, click **Start a scenario**, choose **Dependency bump that breaks the build**, and click **Start on GitHub**. Switch to the GitHub tab.
+**Do:** press **4**, click **Start a scenario**, choose **Dependency bump that breaks the build**, and click **Start on GitHub**. The dialog says it's waiting for the bump Action; in about 30 seconds the repo's *Dependency bump* Action has pushed a Dependabot-style branch (a commit from `github-actions[bot]`), and the dialog shows **Open the pull request on GitHub ↗**.
 
-**The audience sees** the repo's *Dependency bump* Action run and open a PR, Dependabot style: "Bump orbit-money from 1.0.0 to 2.0.0", from `github-actions[bot]`. Its checks show **agentic-sdlc/agent-review — Required — pending: Agent is checking whether this upgrade breaks anything**. Back in the console the run has appeared (the webhook started it) and the graph moves: **Tests** fail.
+**Do:** click it. GitHub's "Open a pull request" page has the title ("Bump orbit-money from 1.0.0 to 2.0.0"), a Dependabot-style description and the labels filled in. Click **Create pull request**.
 
-**Say:** "Nobody clicked anything in our tool. GitHub told Temporal a PR was opened, and a Workflow started for it. The agent's check is required, so this PR can't merge until the agent says so."
+**Say:** "I'm the developer here: a bump landed and I've opened the PR, like on any Monday."
+
+**The audience sees** the new PR's checks show **agentic-sdlc/agent-review — Required — pending: Agent is checking whether this upgrade breaks anything**. Back in the console the run has appeared (the webhook started it) and the graph moves: **Tests** fail.
+
+**Say:** "I didn't tell our tool anything. GitHub told Temporal a PR was opened, and a Workflow started for it. The agent's check is required, so this PR can't merge until the agent says so."
 
 **Do:** while **Fix** is active, kill the worker: **Kill the worker** locally, or crash the worker from the catalog workspace. Start it again after about 5 seconds.
 
@@ -325,7 +329,8 @@ deployment = WorkerDeploymentConfig(
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | A scenario started on GitHub but no run appears | The webhook didn't arrive | Locally, check `.logs/webhooks.log` and that `dev.py` printed the GitHub line. Hosted, check the repo's **Settings → Webhooks → Recent deliveries** (redeliver from there) |
-| The bump scenario opens no PR | The Action failed, or Actions can't create PRs | Check the repo's **Actions** tab; re-run `scripts/setup-github.sh` |
+| The bump scenario says the Action didn't push its branch | The Action failed or is queued | Check the repo's **Actions** tab, then start the scenario again |
+| The bump PR is open but no run appears | It was opened without this copy's owner label | Add the label (`agentic-sdlc:<copy>`) to the PR; the run starts then |
 | `dev.py` says webhook forwarding didn't start | Someone else is forwarding the repo, or your gh login lacks `admin:repo_hook` | Wait for them to stop, or `gh auth refresh -s admin:repo_hook` |
 | The agent comments "This demo already has 3 agent runs in progress" | The per-copy cap | Stop a run, or **Reset**, then reopen the issue or PR |
 | A comment doesn't change anything | The gate wants a command (`/ship` or `/stop` at production) | The **Conversation** tab says "Noted; the run is waiting for …" |
@@ -345,7 +350,7 @@ The fine-grained PAT is scoped to `temporal-sa/agentic-sdlc-storefront` with Con
 
 ## Set up GitHub
 
-`scripts/setup-github.sh` (as a repo admin) creates the labels, lets Actions open PRs, puts `sandbox-template/` on `main` and the `baseline` tag, pushes the review sample branch, and requires the agent's check on `main`. With `--webhook-url https://agentic-sdlc.tmprl-demo.cloud/webhooks/github` it also points the repo's webhook at the hosted demo, signed with the `GITHUB_WEBHOOK_SECRET` from the catalog's `runtime` secret. Re-run it after changing the template or rotating that secret.
+`scripts/setup-github.sh` (as a repo admin) creates the labels, puts `sandbox-template/` on `main` and the `baseline` tag, pushes the review sample branch, and requires the agent's check on `main`. With `--webhook-url https://agentic-sdlc.tmprl-demo.cloud/webhooks/github` it also points the repo's webhook at the hosted demo, signed with the `GITHUB_WEBHOOK_SECRET` from the catalog's `runtime` secret. Re-run it after changing the template or rotating that secret.
 
 ## Run it locally
 

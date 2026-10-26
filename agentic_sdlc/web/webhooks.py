@@ -54,8 +54,10 @@ RUN_ID_FOR_KIND = {"issue": "issue", "dependency": "pr", "review": "review"}
 # The console shows a run's steps before a worker has published them.
 STEPS_FOR_KIND = {"issue": workflow._initial_steps, "dependency": dependency._steps, "review": review._steps}
 BUMP_TITLE = re.compile(r"^[Bb]ump \S+ from \S+ to \S+")
-# PRs the demo's scenarios open (the bump Action, the sample PR) get their owner label in a second
-# API call, after "opened" has fired; route them on "labeled" instead, once the owner is known.
+# PRs from the demo's scenario branches (the bump, the sample PR) belong to whichever copy's label
+# they carry. A PR opened from GitHub's prefilled page has it when it opens; one opened through the
+# API gets it in a second call, after "opened" has fired. Either way, start once the owner is known,
+# and never treat one as an unlabeled person's PR.
 SCENARIO_BRANCHES = ("dependency-bump/", "review-sample/")
 QUEUE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
@@ -136,11 +138,12 @@ def route(event: str, payload: dict) -> list[Action]:
             return []  # the pipeline's own PRs carry the bot marker
         labels = [label["name"] for label in pr.get("labels", [])]
         from_scenario = pr["head"]["ref"].startswith(SCENARIO_BRANCHES)
+        owned = any(label.startswith(config.OWNER_LABEL_PREFIX) for label in labels)
         if action == "labeled":
             added = payload.get("label", {}).get("name", "")
             if not (from_scenario and added.startswith(config.OWNER_LABEL_PREFIX)):
                 return []
-        elif from_scenario:
+        elif from_scenario and not owned:
             return []
         queue = owner_queue(labels)
         if queue is None:

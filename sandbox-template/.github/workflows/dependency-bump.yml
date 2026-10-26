@@ -1,10 +1,11 @@
-# Opens a Dependabot-style pull request that bumps one dependency. The agentic SDLC demo
-# triggers it (or you can, from the Actions tab); the demo's agents then check whether the
+# Pushes a Dependabot-style branch that bumps one dependency. The agentic SDLC demo triggers it
+# (or you can, from the Actions tab), then hands the presenter GitHub's prefilled "Open a pull
+# request" page for the branch. Opening that PR starts the demo's agents: they check whether the
 # bump breaks anything, fix the code if it does, and explain the change on the PR.
 #
-# A fresh PR every run, on its own branch, so several people can run the demo at once.
-# `owner` is the label of the demo copy that should handle the PR (hosted, a crashable
-# workspace or a laptop); each copy only acts on PRs carrying its own label.
+# It doesn't open the PR itself: the organization doesn't let Actions open pull requests, and a
+# person opening it is the developer's part of the story. A fresh branch every run, so several
+# people can run the demo at once.
 name: Dependency bump
 
 on:
@@ -16,31 +17,29 @@ on:
       to_version:
         description: Version to bump to
         default: "2.0.0"
-      owner:
-        description: Label of the demo copy that owns the PR
-        default: "agentic-sdlc:agentic-sdlc"
+      branch:
+        description: Branch to push (the demo picks one; leave empty to name it after this run)
+        default: ""
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Open the bump pull request
+      - name: Push the bump branch
         env:
-          GH_TOKEN: ${{ github.token }}
           PACKAGE: ${{ inputs.package }}
           TO: ${{ inputs.to_version }}
-          OWNER: ${{ inputs.owner }}
+          BRANCH: ${{ inputs.branch }}
         run: |
           set -euo pipefail
           spec=$(node -p "require('./package.json').dependencies[process.env.PACKAGE]")
           repo="${spec#github:}"; repo="${repo%%#*}"
           from="${spec##*#v}"
-          branch="dependency-bump/${PACKAGE}-${TO}-${GITHUB_RUN_ID}"
+          branch="${BRANCH:-dependency-bump/${PACKAGE}-${TO}-${GITHUB_RUN_ID}}"
           git switch -c "$branch"
           npm pkg set "dependencies.${PACKAGE}=github:${repo}#v${TO}"
           sed -i "s|${repo}@v${from}|${repo}@v${TO}|" index.html
@@ -48,25 +47,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "Bump ${PACKAGE} from ${from} to ${TO}"
           git push origin "$branch"
-          gh label create "$OWNER" --color 5319e7 --description "Owned by this copy of the agentic SDLC demo" 2>/dev/null || true
-          gh pr create --base main --head "$branch" \
-            --title "Bump ${PACKAGE} from ${from} to ${TO}" \
-            --label dependencies --label "$OWNER" \
-            --body "Bumps [${PACKAGE}](https://github.com/${repo}) from ${from} to ${TO}.
-
-          <details>
-          <summary>Release notes</summary>
-
-          See the [${PACKAGE} changelog](https://github.com/${repo}/blob/v${TO}/CHANGELOG.md).
-          </details>
-
-          <details>
-          <summary>Commits</summary>
-
-          [Compare v${from}...v${TO}](https://github.com/${repo}/compare/v${from}...v${TO})
-          </details>
-
-          Updated in \`package.json\` and the import map in \`index.html\`.
-
-          ---
-          Opened by the *Dependency bump* workflow, in the style of a Dependabot version update."
+          title="Bump ${PACKAGE} from ${from} to ${TO}"
+          echo "### Open the pull request" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[${title}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1&labels=dependencies)" >> "$GITHUB_STEP_SUMMARY"

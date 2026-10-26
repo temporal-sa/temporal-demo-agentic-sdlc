@@ -1,6 +1,6 @@
 """End-to-end check without the UI: start a scenario, then answer every gate on GitHub with `gh`.
 
-    uv run python scripts/drive_run.py dependency
+    uv run python scripts/drive_run.py dependency   # opens the bump PR with gh, as the presenter would
     uv run python scripts/drive_run.py review [--ask "Please fix the rounding"]
     uv run python scripts/drive_run.py issue [--issue free-shipping] [--break-canary] [--hold production]
 
@@ -12,6 +12,7 @@ script closes its PR. Needs scripts/dev.py (or a hosted copy) receiving the repo
 import argparse
 import subprocess
 import time
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -38,7 +39,16 @@ def comment(github_url: str, body: str) -> None:
 before = {r["run_id"] for r in http.get("/api/overview").json()["runs"]}
 started = http.post("/api/scenarios", json={"kind": args.kind, "issue_id": args.issue})
 started.raise_for_status()
-print("started on GitHub:", started.json()["url"], flush=True)
+scenario = started.json()
+print("started on GitHub:", scenario["url"], flush=True)
+if scenario["open_pr"]:
+    # The bump: open the PR the presenter would open from GitHub's prefilled page.
+    page = urlparse(scenario["url"])
+    fields = {k: v[0] for k, v in parse_qs(page.query).items()}
+    labels = [arg for label in fields["labels"].split(",") for arg in ("--label", label)]
+    subprocess.run(["gh", "pr", "create", "--repo", config.GITHUB_SANDBOX_REPO, "--base", "main",
+                    "--head", page.path.split("...", 1)[1], "--title", fields["title"], "--body", fields["body"],
+                    *labels], check=True)
 
 run_id = None
 while run_id is None:  # the run appears when GitHub's webhook for it arrives

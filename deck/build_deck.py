@@ -424,7 +424,7 @@ I'll show every one of them live, and the console keeps score: a criterion only 
     d.box(s, int(3.0 * IN), int(2.05 * IN), int(4.0 * IN), int(1.05 * IN), fill=RGBColor(0x14, 0x14, 0x14), edge=GREEN, shape=MSO_SHAPE.ROUNDED_RECTANGLE, width=1.5)
     d.text(s, int(3.0 * IN), int(2.05 * IN), int(4.0 * IN), int(1.05 * IN), "Demo time", size=32, bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
     d.notes(s, """
-Do: switch to the console, press 4, click Start a scenario, choose "Dependency bump that breaks the build". Show the bump PR on GitHub with the agent's Required check pending.
+Do: switch to the console, press 4, click Start a scenario, choose "Dependency bump that breaks the build". When the branch is ready, click Open the pull request on GitHub, then Create pull request. Show the agent's Required check pending.
 Watch the run appear from the webhook; the tests fail, the coding agent diagnoses why from the changelog.
 Do: while it fixes the code, kill the worker. Point at the yellow banner. Start it again; the agent carries on. Optionally Inject 429 on its card.
 Do: show the PR: the diagnosis comment, the agent's commit on the bump branch, the rewritten description, the review, the green check, the locked merge button.
@@ -439,7 +439,7 @@ Do: press 5, Roll out v2 during a second issue run. Then press 6 for the scoreca
     # The headline scenario: a broken dependency bump, repaired and explained on the PR
     s = d.slide()
     d.headline(s, "A broken bump, fixed and explained by an agent.")
-    flow = [("BUMP PR\nopened by an Action", GREEN, MSO_SHAPE.RECTANGLE), ("TESTS\nfail", CYAN, MSO_SHAPE.RECTANGLE),
+    flow = [("BUMP PR\nfrom an Action's branch", GREEN, MSO_SHAPE.RECTANGLE), ("TESTS\nfail", CYAN, MSO_SHAPE.RECTANGLE),
             ("DIAGNOSE\nfailures + changelog", PURPLE, MSO_SHAPE.OVAL), ("FIX\non the bump branch", PURPLE, MSO_SHAPE.OVAL),
             ("EXPLAIN\nrewrite the PR", CYAN, MSO_SHAPE.RECTANGLE), ("REVIEW\nsecond model", PURPLE, MSO_SHAPE.OVAL),
             ("✓ READY\nTO MERGE", GREEN, MSO_SHAPE.RECTANGLE)]

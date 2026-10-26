@@ -139,7 +139,7 @@ export function App() {
 
       {dialog && <ScenarioDialog config={config} onClose={() => setDialog(false)} onStarted={(started) => {
         setDialog(false);
-        setToast(`Started on GitHub: ${started.url}. The run appears here when GitHub's webhook arrives.`);
+        if (!started.open_pr) setToast(`Started on GitHub: ${started.url}. The run appears here when GitHub's webhook arrives.`);
         setFollowNext(session.runs[0]?.run_id ?? "");
         api<Config>("/api/config").then(setConfig).catch(() => undefined);
       }} />}

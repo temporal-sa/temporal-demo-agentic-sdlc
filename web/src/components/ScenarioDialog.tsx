@@ -1,5 +1,6 @@
 // Start a scenario: do on GitHub what a person would (open an issue, run the dependency bump,
 // open a PR), labeled for this copy of the demo. The run starts when GitHub's webhook arrives.
+// For the bump, the Action pushes the branch and the presenter opens the PR from a prefilled page.
 
 import { useState } from "react";
 import { api, type Autonomy, type Config, type ModelChoice, type RoleModels, type RunKind } from "../api";
@@ -12,14 +13,14 @@ const ROLES: { key: keyof RoleModels; label: string; hint: string }[] = [
 ];
 const SCENARIOS: { kind: RunKind; name: string; note: string }[] = [
   { kind: "dependency", name: "Dependency bump that breaks the build",
-    note: "Runs the repo's bump Action: a Dependabot-style PR upgrades orbit-money to 2.0, which has breaking changes. The agent works out why the tests fail, fixes the code on the bump branch and rewrites the PR to explain it." },
+    note: "Runs the repo's bump Action, which pushes a Dependabot-style branch upgrading orbit-money to 2.0 (it has breaking changes). You open the PR; the agent works out why the tests fail, fixes the code on the bump branch and rewrites the PR to explain it." },
   { kind: "review", name: "A PR for the agent to review",
     note: "Opens a PR with a subtle bug. The agent's required check stays pending until it has reviewed it inline. Reply on the PR to ask for a fix." },
   { kind: "issue", name: "An issue, all the way to production",
     note: "Opens an issue labeled agent. The planner asks and plans on the issue; reply /approve, comment to steer, review the PR, then /ship." },
 ];
 
-interface Started { url: string; kind: RunKind }
+interface Started { url: string; kind: RunKind; open_pr: boolean }
 
 export function ScenarioDialog({ config, onClose, onStarted }: {
   config: Config; onClose: () => void; onStarted: (started: Started) => void;
@@ -33,6 +34,7 @@ export function ScenarioDialog({ config, onClose, onStarted }: {
   const [autonomy, setAutonomy] = useState<Autonomy>(config.settings.autonomy);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [ready, setReady] = useState<Started | null>(null);  // a bump branch, waiting for the presenter to open its PR
 
   const pick = (id: string) => {
     setIssueId(id);
@@ -47,12 +49,34 @@ export function ScenarioDialog({ config, onClose, onStarted }: {
     setError(null);
     try {
       const issue = kind === "issue" ? { issue_id: issueId === "custom" ? null : issueId, title, body } : {};
-      onStarted(await api<Started>("/api/scenarios", { json: { kind, ...issue, settings: { models, autonomy } } }));
+      const started = await api<Started>("/api/scenarios", { json: { kind, ...issue, settings: { models, autonomy } } });
+      if (started.open_pr) setReady(started); else onStarted(started);
     } catch (e) {
       setError((e as Error).message);
       setStarting(false);
     }
   };
+
+  if (ready) {
+    return (
+      <div className="dialog-scrim" onClick={() => onStarted(ready)}>
+        <div className="dialog card" role="dialog" aria-modal="true" aria-labelledby="open-pr-title" onClick={(e) => e.stopPropagation()}>
+          <h2 id="open-pr-title" className="heading">The bump branch is ready. Open the PR.</h2>
+          <p className="muted">
+            The Dependency bump Action pushed it, Dependabot style. GitHub's "Open a pull request" page has the title,
+            description and labels filled in: click <strong>Create pull request</strong> there, as a developer would.
+            GitHub's webhook then starts the agents, and the run appears here.
+          </p>
+          <div className="dialog-actions">
+            <button className="button secondary ultraviolet" onClick={() => onStarted(ready)}>Close</button>
+            <a className="button primary ultraviolet" href={ready.url} target="_blank" rel="noreferrer" onClick={() => onStarted(ready)}>
+              Open the pull request on GitHub ↗
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="dialog-scrim" onClick={onClose}>
@@ -119,7 +143,7 @@ export function ScenarioDialog({ config, onClose, onStarted }: {
         <div className="dialog-actions">
           <button className="button secondary ultraviolet" onClick={onClose}>Cancel</button>
           <button className="button primary ultraviolet" disabled={starting || (kind === "issue" && !title.trim())} onClick={start}>
-            {starting ? "Starting…" : "Start on GitHub"}
+            {starting ? (kind === "dependency" ? "Waiting for the bump Action…" : "Starting…") : "Start on GitHub"}
           </button>
         </div>
       </div>

@@ -53,7 +53,7 @@ flowchart LR
 
 All of it happens on [temporal-sa/agentic-sdlc-storefront](https://github.com/temporal-sa/agentic-sdlc-storefront), a small storefront whose `main` stays locked: the agents get PRs ready to merge, and nothing merges into the shared repo.
 
-**Dependency repair.** The repo's *Dependency bump* Action opens a Dependabot-style PR that upgrades [orbit-money](https://github.com/temporal-sa/orbit-money) from 1.0 to 2.0, which has breaking changes.
+**Dependency repair.** The repo's *Dependency bump* Action pushes a Dependabot-style branch that upgrades [orbit-money](https://github.com/temporal-sa/orbit-money) from 1.0 to 2.0, which has breaking changes, and the console hands the presenter GitHub's prefilled "Open a pull request" page for it. (The `temporal-sa` org doesn't let Actions open PRs, and a person opening it is the developer's part of the story.) Opening the PR starts the run.
 
 1. The agent's required check goes pending. The run tests the bump branch; if it passes, the check goes green and that's it.
 2. If it fails, a coding agent diagnoses it from the test output, the diff and the package's changelog, and posts the diagnosis.

@@ -392,7 +392,8 @@ SCENARIO_ACTIVITY = {"issue": "open_issue_for_copy", "dependency": "dispatch_bum
 @app.post("/api/scenarios")
 async def start_scenario(body: Scenario):
     """Do on GitHub what a person would (open an issue, run the bump Action, open a PR), labeled
-    for this copy. The run itself starts when GitHub's webhook for it arrives."""
+    for this copy. The run itself starts when GitHub's webhook for it arrives. For the bump, the
+    presenter opens the PR from the returned link."""
     if body.settings:
         for role, choice in body.settings.models:
             if choice.model not in allowlist(require_keys=False).get(choice.provider, ()):
@@ -410,8 +411,10 @@ async def start_scenario(body: Scenario):
         SCENARIO_ACTIVITY[body.kind],
         ScenarioInput(repo=config.GITHUB_SANDBOX_REPO, owner_label=config.OWNER_LABEL, title=title, body=text),
         id=f"{RUNS_PREFIX}scenario-{body.kind}-{secrets.token_hex(4)}", task_queue=config.TASK_QUEUE,
-        result_type=ScenarioStarted, start_to_close_timeout=timedelta(seconds=30),
-        schedule_to_close_timeout=timedelta(minutes=1),
+        result_type=ScenarioStarted,
+        # The bump waits for its Action to push the branch, usually about 30 seconds.
+        start_to_close_timeout=timedelta(minutes=3), heartbeat_timeout=timedelta(seconds=30),
+        schedule_to_close_timeout=timedelta(minutes=4),
     )
     return started.model_dump()
 

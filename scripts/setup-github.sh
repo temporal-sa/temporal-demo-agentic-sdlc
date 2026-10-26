@@ -2,14 +2,14 @@
 # Set up the shared storefront repo for the GitHub-native demo. Runs as you (your gh login needs
 # admin on the repo); safe to re-run. It:
 #
-#   1. creates the labels the demo uses;
-#   2. lets the Dependency bump Action open pull requests;
-#   3. puts sandbox-template/ on main and moves the baseline tag to it (lifting the rulesets that
+#   1. creates the labels the demo uses (the Dependency bump Action only pushes branches, so it
+#      needs no permission to open pull requests, which the organization doesn't grant);
+#   2. puts sandbox-template/ on main and moves the baseline tag to it (lifting the rulesets that
 #      lock them for a moment, and always restoring them);
-#   4. pushes the review scenario's sample branch (sandbox-samples/discount-rounding);
-#   5. requires the agent's check, agentic-sdlc/agent-review, on main, so GitHub shows it as a
+#   3. pushes the review scenario's sample branch (sandbox-samples/discount-rounding);
+#   4. requires the agent's check, agentic-sdlc/agent-review, on main, so GitHub shows it as a
 #      Required check that stays pending until the agent is done (main stays locked: nothing merges);
-#   6. with --webhook-url, points the repo's webhook at a hosted copy of the demo, signed with the
+#   5. with --webhook-url, points the repo's webhook at a hosted copy of the demo, signed with the
 #      GITHUB_WEBHOOK_SECRET in the catalog's runtime secret.
 #
 #   scripts/setup-github.sh
@@ -43,12 +43,7 @@ label dependencies 0366d6 "Dependency updates"
 label agent-plan 444ce7 "The planner agent posted a plan"
 label rolled-back fecb2f "The canary failed and the change was reverted"
 
-# 2. Actions may open PRs ------------------------------------------------------------------------
-gh api -X PUT "repos/$REPO/actions/permissions/workflow" \
-  -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true >/dev/null
-echo "Actions can open pull requests"
-
-# 3 and 4. main, baseline and the sample branch -------------------------------------------------
+# 2 and 3. main, baseline and the sample branch -------------------------------------------------
 ruleset_id() { gh api "repos/$REPO/rulesets" --jq ".[] | select(.name == \"$1\") | .id"; }
 MAIN_RULES=$(ruleset_id protect-baseline)
 TAG_RULES=$(ruleset_id protect-baseline-tag)
@@ -93,7 +88,7 @@ git push -q -f origin "$SAMPLE_BRANCH"
 echo "sample branch $SAMPLE_BRANCH pushed"
 cd "$DEMO"
 
-# 5. Require the agent's check on main --------------------------------------------------------------
+# 4. Require the agent's check on main --------------------------------------------------------------
 RULES=$(cat <<JSON
 {"rules": [
   {"type": "deletion"}, {"type": "non_fast_forward"}, {"type": "update"},
@@ -106,7 +101,7 @@ JSON
 gh api -X PUT "repos/$REPO/rulesets/$MAIN_RULES" --input - <<<"$RULES" >/dev/null
 echo "main requires $CHECK"
 
-# 6. The hosted demo's webhook --------------------------------------------------------------------------
+# 5. The hosted demo's webhook --------------------------------------------------------------------------
 if [[ -n "$WEBHOOK_URL" ]]; then
   SECRET=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$RUNTIME_SECRET" \
     --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["GITHUB_WEBHOOK_SECRET"])')

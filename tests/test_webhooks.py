@@ -135,8 +135,8 @@ def test_drafts_and_the_pipelines_own_prs_are_left_alone():
     assert webhooks.route("issues", issue_event(body=f"Rolled back\n{BOT_MARKER}")) == []
 
 
-def test_scenario_prs_start_when_their_owner_label_lands_not_when_they_open():
-    """The bump Action and the sample PR label the PR just after opening it."""
+def test_scenario_prs_start_once_their_owner_label_is_known():
+    """The sample PR is labeled just after it opens; a bump PR opened from GitHub's page has its labels at once."""
     head = "dependency-bump/orbit-money-2.0.0-99"
     assert webhooks.route("pull_request", pr_event(head=head)) == []
     labeled = pr_event("labeled", pr_labels=("dependencies", "agentic-sdlc:agentic-sdlc"), head=head,
@@ -144,6 +144,10 @@ def test_scenario_prs_start_when_their_owner_label_lands_not_when_they_open():
     assert webhooks.route("pull_request", labeled)[0].kind == "dependency"
     other_label = pr_event("labeled", pr_labels=("dependencies",), head=head, label="dependencies")
     assert webhooks.route("pull_request", other_label) == []
+    # Opened from GitHub's prefilled page, it carries its labels from the start.
+    opened_labeled = pr_event(pr_labels=("dependencies", "agentic-sdlc:agentic-sdlc"), head=head,
+                              title="Bump orbit-money from 1.0.0 to 2.0.0")
+    assert webhooks.route("pull_request", opened_labeled)[0].kind == "dependency"
     # Labeling a person's PR doesn't start a second review.
     assert webhooks.route("pull_request", pr_event("labeled", label="agentic-sdlc:agentic-sdlc")) == []
 

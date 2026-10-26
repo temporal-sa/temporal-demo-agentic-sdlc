@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import timedelta
+from urllib.parse import urlencode
 
 import httpx
 from typing import Literal
@@ -183,13 +184,16 @@ class ScenarioInput(BaseModel):
 
 
 class ScenarioStarted(BaseModel):
-    url: str  # the issue, the PR, or the Actions run that will open the PR
+    url: str  # the issue or the PR, or for the bump, GitHub's prefilled "Open a pull request" page
     kind: str
+    open_pr: bool = False  # the presenter opens the PR from ``url``, as a developer would
 
 
 # The required check the agent sets on pull requests; a ruleset on main requires it.
 STATUS_CONTEXT = "agentic-sdlc/agent-review"
 BUMP_WORKFLOW = "dependency-bump.yml"
+BUMP_PACKAGE, BUMP_TO = "orbit-money", "2.0.0"
+BUMP_BRANCH_WAIT_SECONDS = 120  # the Action usually pushes its branch within 30 seconds
 SAMPLE_PR_BRANCH = "samples/discount-rounding"
 
 
@@ -392,12 +396,38 @@ class GitHubActivities:
 
     @activity.defn
     async def dispatch_bump(self, input: ScenarioInput) -> ScenarioStarted:
-        """Run the repo's Dependency bump Action, which opens a Dependabot-style PR labeled for
-        this copy. That PR's webhook starts the repair."""
+        """Run the repo's Dependency bump Action, which pushes a Dependabot-style bump branch, and
+        return GitHub's "Open a pull request" page for it, prefilled and labeled for this copy.
+        The presenter opens the PR from there, and that PR's webhook starts the repair.
+
+        The Action doesn't open the PR itself: organizations often forbid Actions from opening
+        PRs, and a person opening it is the developer's part of the story anyway."""
         await self._ensure_label(input.repo, input.owner_label)
-        await self._request("POST", f"/repos/{input.repo}/actions/workflows/{BUMP_WORKFLOW}/dispatches",
-                            {"ref": "main", "inputs": {"owner": input.owner_label}}, allow={204})
-        return ScenarioStarted(url=f"https://github.com/{input.repo}/actions/workflows/{BUMP_WORKFLOW}", kind="dependency")
+        spec = (await self._request("GET", f"/repos/{input.repo}/contents/package.json?ref=main",
+                                    headers={"Accept": "application/vnd.github.raw+json"})).json()
+        dependency = spec["dependencies"][BUMP_PACKAGE]  # "github:temporal-sa/orbit-money#v1.0.0"
+        source, before = dependency.removeprefix("github:").split("#v")
+        branch = f"dependency-bump/{BUMP_PACKAGE}-{BUMP_TO}-{activity.info().activity_id.rsplit('-', 1)[-1]}"
+        if not await self._branch_exists(input.repo, branch):  # a retry after the dispatch
+            await self._request("POST", f"/repos/{input.repo}/actions/workflows/{BUMP_WORKFLOW}/dispatches", {
+                "ref": "main", "inputs": {"package": BUMP_PACKAGE, "to_version": BUMP_TO, "branch": branch}}, allow={204})
+        # A bounded wait for one Action run, heartbeating, so the console can hand over a link that works.
+        deadline = time.monotonic() + BUMP_BRANCH_WAIT_SECONDS
+        while not await self._branch_exists(input.repo, branch):
+            if time.monotonic() > deadline:
+                raise ApplicationError(f"The Dependency bump Action didn't push {branch}; check the repo's Actions tab.",
+                                       type="GitHubRejected", non_retryable=True)
+            activity.heartbeat()
+            await asyncio.sleep(2)
+        title = f"Bump {BUMP_PACKAGE} from {before} to {BUMP_TO}"
+        query = urlencode({"expand": "1", "title": title, "body": _bump_body(source, before, BUMP_TO),
+                           "labels": f"dependencies,{input.owner_label}"})
+        return ScenarioStarted(url=f"https://github.com/{input.repo}/compare/main...{branch}?{query}",
+                               kind="dependency", open_pr=True)
+
+    async def _branch_exists(self, repo: str, branch: str) -> bool:
+        response = await self._request("GET", f"/repos/{repo}/git/ref/heads/{branch}", allow={404})
+        return response.status_code == 200
 
     @activity.defn
     async def open_sample_pr(self, input: ScenarioInput) -> ScenarioStarted:
@@ -515,3 +545,23 @@ def _retry_after(response: httpx.Response) -> timedelta:
     if response.headers.get("x-ratelimit-remaining") == "0" and (reset := response.headers.get("x-ratelimit-reset")):
         return timedelta(seconds=max(1, int(reset) - int(time.time())))
     return timedelta(seconds=60)
+
+
+def _bump_body(source: str, before: str, after: str) -> str:
+    """A Dependabot-style description for the bump PR."""
+    return f"""Bumps [{BUMP_PACKAGE}](https://github.com/{source}) from {before} to {after}.
+
+<details>
+<summary>Release notes</summary>
+
+See the [{BUMP_PACKAGE} changelog](https://github.com/{source}/blob/v{after}/CHANGELOG.md).
+</details>
+
+<details>
+<summary>Commits</summary>
+
+[Compare v{before}...v{after}](https://github.com/{source}/compare/v{before}...v{after})
+</details>
+
+Updated in `package.json` and the import map in `index.html` by the *Dependency bump* workflow, in the style
+of a Dependabot version update."""
