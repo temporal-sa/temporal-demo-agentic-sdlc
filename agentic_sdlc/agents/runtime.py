@@ -67,15 +67,26 @@ Read AGENTS.md first. Then implement ONLY your subtask.
 - Keep business logic in src/cart.js with tests in tests/; keep DOM code in src/app.js.
 - Prefer edit_file for small changes. Don't add dependencies.
 - Run run_tests before you finish. If tests fail, fix them and run again.
-- Finish with a short summary of what you changed."""
+- run_tests installs the dependencies first. When a dependency upgrade breaks things, read the
+  dependency's changelog at node_modules/<name>/CHANGELOG.md and follow its migration notes;
+  adapt our code to the new version rather than pinning the old one.
+- Finish with a short summary of what you changed, file by file, and why."""
+
+DIAGNOSE_INSTRUCTIONS = """\
+A dependency upgrade on your branch breaks the build. Work out why before changing anything:
+run run_tests (it installs dependencies), read the dependency's changelog at
+node_modules/<name>/CHANGELOG.md, and read the code that uses the dependency. Report what changed
+in the dependency (cite the changelog), what broke and how it failed, the root cause in our code,
+and the fix, file by file. Don't edit files in this turn."""
 
 REVIEWER_INSTRUCTIONS = """\
 You are a code-review agent in an automated delivery pipeline. You review a pull request
 diff for a small static web storefront against the approved plan.
 
 Approve when the change meets the acceptance criteria, keeps tests meaningful, and has no
-obvious bug. Request changes only for real problems, each with the file and a specific,
-actionable comment. Don't nitpick style."""
+obvious bug. Request changes only for real problems, each with the file, the line in the new
+version of the file when it's about one line, and a specific, actionable comment. Don't
+nitpick style."""
 
 SECURITY_INSTRUCTIONS = """\
 You are a security-review agent in an automated delivery pipeline. Review a pull request diff

@@ -24,7 +24,7 @@ with workflow.unsafe.imports_passed_through():
 
     from agentic_sdlc.agents.harness_ext import DemoDeps
     from agentic_sdlc.agents.registry import settings_for
-    from agentic_sdlc.agents.runtime import CODER, PLANNER, REVIEWER, SECURITY_REVIEWER
+    from agentic_sdlc.agents.runtime import CODER, DIAGNOSE_INSTRUCTIONS, PLANNER, REVIEWER, SECURITY_REVIEWER
     from agentic_sdlc.models import (
         AgentInit,
         Clarification,
@@ -35,6 +35,9 @@ with workflow.unsafe.imports_passed_through():
         Autonomy,
         CodeReply,
         CodeRequest,
+        DiagnoseReply,
+        DiagnoseRequest,
+        Diagnosis,
         PlanReply,
         PlanRequest,
         ReviewReply,
@@ -184,6 +187,27 @@ class CoderAgent(_AgentBase):
             tests_passed=result.output.tests_passed,
             usage=usage_of(result, self._init.model.key),
         )
+
+
+    @agent.accepts
+    async def diagnose(self, request: DiagnoseRequest) -> DiagnoseReply:
+        """Work out why a dependency upgrade on this branch breaks the build, without editing."""
+        prompt = (
+            f"This branch bumps {request.package} from {request.from_version} to {request.to_version}.\n\n"
+            f"The tests fail:\n```\n{request.test_output[-6000:]}\n```\n\nThe bump's diff:\n```diff\n{request.diff}\n```"
+        )
+        result = await CODER.run(
+            prompt,
+            instructions=DIAGNOSE_INSTRUCTIONS,
+            output_type=Diagnosis,
+            deps=self._deps(),
+            message_history=self._history,
+            model=self._init.model.key,
+            model_settings=settings_for(self._init.model),
+            usage_limits=CODER_LIMITS,
+        )
+        self._history = result.all_messages()
+        return DiagnoseReply(diagnosis=result.output, usage=usage_of(result, self._init.model.key))
 
 
 @agent.defn(name="ReviewerAgent")

@@ -1,7 +1,7 @@
 // The story acts around the live run. Each one makes a single point the presenter can
 // leave on screen while talking, and each problem it names is one the live run resolves.
 
-import { ago, api, money, temporalLink, type Config, type RunSummary, type SessionView } from "../api";
+import { ago, api, money, temporalLink, type Config, type RunSummary, type Overview } from "../api";
 import { useState } from "react";
 import { usePoll } from "../live";
 import { CRITERIA, LIFECYCLE, RECAP, STATS } from "../story";
@@ -9,8 +9,8 @@ import { Scorecard, type Evidence } from "./Scorecard";
 import { StorefrontPanel } from "./Panels";
 import type { Criterion } from "../api";
 
-export function ResultAct({ session, config, onOpenRun }: { session: SessionView; config: Config; onOpenRun: (id: string) => void }) {
-  const shipped = session.runs.find((r) => r.status === "completed");
+export function ResultAct({ session, config, onOpenRun }: { session: Overview; config: Config; onOpenRun: (id: string) => void }) {
+  const shipped = session.runs.find((r) => r.kind === "issue" && r.status === "completed");
   return (
     <div className="act act-result">
       <section className="act-copy">
@@ -18,8 +18,8 @@ export function ResultAct({ session, config, onOpenRun }: { session: SessionView
         <p className="lede">Temporal ran the process around them: the approvals, the retries, the canary, and the record of every step.</p>
         {shipped ? <RunCard run={shipped} config={config} onOpen={() => onOpenRun(shipped.run_id)} /> : (
           <div className="state-banner">
-            <strong>No run has shipped in this session yet.</strong>
-            <span>Start one before the talk (prepared issue, auto merge) so the audience sees the result first.</span>
+            <strong>No run has shipped from this copy yet.</strong>
+            <span>Start an issue scenario before the talk (prepared issue, auto merge) so the audience sees the result first.</span>
           </div>
         )}
       </section>
@@ -30,7 +30,7 @@ export function ResultAct({ session, config, onOpenRun }: { session: SessionView
   );
 }
 
-function RunCard({ run, config, onOpen }: { run: RunSummary & { issue_url?: string; pr_url?: string }; config: Config; onOpen: () => void }) {
+function RunCard({ run, config, onOpen }: { run: RunSummary; config: Config; onOpen: () => void }) {
   const duration = run.ended_at ? ago(run.ended_at - run.started_at) : "";
   return (
     <div className="card run-card">
@@ -102,7 +102,7 @@ export function HardAct() {
 
 interface Versions { deployment: string; current: string | null; versions: { build_id: string; current: boolean; drainage: string }[] }
 
-export function ChangeAct({ session, onError }: { session: SessionView; config: Config; onError: (m: string) => void }) {
+export function ChangeAct({ session, onError }: { session: Overview; config: Config; onError: (m: string) => void }) {
   const { data: versions, refresh } = usePoll<Versions>("/api/versions", 3000);
   const [busy, setBusy] = useState<string | null>(null);
   const current = versions?.current ?? null;
@@ -149,7 +149,7 @@ export function ChangeAct({ session, onError }: { session: SessionView; config: 
             </button>
           </div>
           {live.length > 0 && current && (
-            <p className="muted">{live.filter((r) => r.version && r.version !== current).length} of your {live.length} in-flight run(s) are pinned to an older version and will finish on it.</p>
+            <p className="muted">{live.filter((r) => r.version && r.version !== current).length} of the {live.length} in-flight run(s) are pinned to an older version and will finish on it.</p>
           )}
         </section>
         <section className="card">

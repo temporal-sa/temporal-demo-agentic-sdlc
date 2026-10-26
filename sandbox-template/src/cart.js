@@ -1,5 +1,10 @@
 // Pure cart logic. Everything here is covered by tests/cart.test.js and has no DOM access,
-// so it runs the same in the browser and under `node --test`.
+// so it runs the same in the browser and under `node --test`. Money helpers come from the
+// orbit-money package (package.json for Node, the import map in index.html for the browser).
+
+import { formatMoney, roundCents } from "orbit-money";
+
+export { formatMoney };
 
 export const TAX_RATE = 0.08;
 
@@ -39,10 +44,3 @@ export function totals(cart) {
   return { subtotal: sub, tax, total: roundCents(sub + tax) };
 }
 
-export function formatMoney(amount) {
-  return `$${amount.toFixed(2)}`;
-}
-
-export function roundCents(amount) {
-  return Math.round(amount * 100) / 100;
-}

@@ -28,5 +28,5 @@ class CheckActivities:
         """Run the test suite on what the agent actually pushed to its branch."""
         async with tools.workspace_lock(workspace):
             root = await tools.checkout(workspace)
-            code, output = await tools.run_sandboxed(root, ["node", "--test", "tests/"])
+            code, output = await tools.run_test_suite(root)
         return TestRun(passed=code == 0, output=output)

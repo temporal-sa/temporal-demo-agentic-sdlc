@@ -1,20 +1,20 @@
-"""The web server: the presenter console's API, its live stream, and the storefront environments.
+"""The web server: GitHub's webhooks, the console's API and live stream, and the storefront environments.
 
-It holds no LLM keys and no GitHub token. It starts runs, answers gates and approvals, reads
-progress with Describe (free, and available while workers are down), relays agent events
-from Redis, and serves each session's staging, production and canary storefront from the
-commits the Environments Workflow records.
+Runs start, and people talk to the agents, on GitHub: webhooks.py turns each delivery into a
+Workflow start or a Signal. The console only watches. It reads progress with Describe (free,
+and available while workers are down), relays agent events from Redis, and serves staging,
+production and canary storefronts from the commits the Environments Workflow records. Its only
+writes are demo machinery: starting a scenario on GitHub, stopping a run, faults, rollouts, reset.
 
-Every browser session is isolated: Workflow IDs, branches, environments and faults are all
-scoped to ``<task queue>.<owner>``, where owner is a hash of the signed-in subject (catalog)
-or of a signed cookie (local).
+It holds no LLM keys and no GitHub token; anything that writes to GitHub runs on the worker.
+Everything is scoped to this copy of the demo: Workflow IDs start ``<task queue>.gh.``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
+import logging
 import re
 import secrets
 import time
@@ -22,41 +22,50 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import httpx
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
-from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from temporalio.client import Client, WorkflowExecutionStatus, WorkflowUpdateFailedError
+from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.service import RPCError, RPCStatusCode
 
-from temporal_agent_harness.harness.agent_client import AgentClient
-
 from agentic_sdlc import config, faults, versions
+from agentic_sdlc.activities.github import CleanupInput, ScenarioInput, ScenarioStarted
 from agentic_sdlc.agents.registry import allowlist
-from agentic_sdlc.models import GateDecision, RoleModels, RunRequest, RunState
+from agentic_sdlc.models import RunState
 from agentic_sdlc.pipeline.environments import EnvState, TrafficBatch
 from agentic_sdlc.temporal_client import EVENT_STREAM, connect
+from agentic_sdlc.web import webhooks
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 UI_DIST = ROOT / "web" / "dist"
-PIPELINE_SOURCE = Path(__file__).resolve().parent.parent / "pipeline" / "workflow.py"
+PIPELINE_DIR = Path(__file__).resolve().parent.parent / "pipeline"
+SOURCE_FILES = {"issue": "workflow.py", "dependency": "dependency.py", "review": "review.py", "base": "base.py"}
 ISSUES = yaml.safe_load((Path(__file__).resolve().parent.parent / "issues.yaml").read_text())
 
-SESSION_COOKIE = "sdlc_session"
-RUN_ID = re.compile(r"[a-z0-9-]{4,40}")
+RUNS_PREFIX = f"{config.TASK_QUEUE}.gh."
+ENVIRONMENTS_ID = f"{RUNS_PREFIX}environments"
+RUN_TYPES = "('IssueToProduction', 'DependencyRepair', 'PullRequestReview')"
+RUN_ID = re.compile(r"(issue|pr|review)-[0-9]{1,7}")
 KEEPALIVE_SECONDS = 15
 VIEW_CACHE_SECONDS = 0.9
 ENV_CACHE_SECONDS = 2.0
 TRAFFIC_FLUSH_SECONDS = 5
 WORKER_HEARTBEAT_PREFIX = f"workers:{config.TASK_QUEUE}:"
-
-_signer = URLSafeSerializer(config.SESSION_SECRET, salt="session")
+CANARY_COOKIE = f"canary-{config.TASK_QUEUE}"
+SETTINGS_KEY = "run-settings:{}"  # per task queue, so each crashable workspace keeps its own
 
 
 class State:
@@ -66,7 +75,7 @@ class State:
     view_cache: dict[str, tuple[float, dict]] = {}
     env_cache: dict[str, tuple[float, EnvState]] = {}
     file_cache: dict[tuple[str, str], tuple[int, bytes, str]] = {}
-    traffic: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+    traffic: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # canary sha -> [page loads, errors]
 
 
 state = State()
@@ -74,6 +83,9 @@ state = State()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if not config.GITHUB_WEBHOOK_SECRET:
+        raise RuntimeError("GITHUB_WEBHOOK_SECRET isn't set. It's the secret on the storefront repo's webhook "
+                           "(scripts/setup-github.sh creates it); without it no GitHub event can be trusted.")
     state.temporal = await connect()
     state.redis = Redis.from_url(config.REDIS_URL)
     state.http = httpx.AsyncClient(timeout=15, follow_redirects=True)
@@ -96,50 +108,18 @@ async def server_timing(request: Request, call_next):
     return response
 
 
-# -- Session identity ----------------------------------------------------------------------
+# -- Scope ---------------------------------------------------------------------------------
 
 
-def owner(request: Request, response: Response) -> str:
-    """A stable, opaque owner key for the caller. In the catalog the platform's SSO gate
-    supplies the subject; locally each browser gets a signed random cookie."""
-    if config.TRUST_AUTH_HEADERS:
-        subject = request.headers.get("X-Temporal-Auth-Subject")
-        if not subject:
-            raise HTTPException(401, "Sign-in required")
-    else:
-        subject = None
-        if cookie := request.cookies.get(SESSION_COOKIE):
-            try:
-                subject = _signer.loads(cookie)
-            except BadSignature:
-                subject = None
-        if subject is None:
-            subject = f"{config.DEV_USER}-{secrets.token_hex(8)}"
-            response.set_cookie(SESSION_COOKIE, _signer.dumps(subject), httponly=True, samesite="lax",
-                                max_age=60 * 60 * 24 * 30)
-    return hashlib.sha256(subject.encode()).hexdigest()[:16]
-
-
-Owner = Annotated[str, Depends(owner)]
-
-
-def prefix(owner_key: str) -> str:
-    return f"{config.TASK_QUEUE}.{owner_key}."
-
-
-def run_workflow_id(owner_key: str, run_id: str) -> str:
+def run_workflow_id(run_id: str) -> str:
     if not RUN_ID.fullmatch(run_id):
         raise HTTPException(400, "Bad run id")
-    return f"{prefix(owner_key)}run-{run_id}"
+    return f"{RUNS_PREFIX}{run_id}"
 
 
-def environments_id(owner_key: str) -> str:
-    return f"{prefix(owner_key)}environments"
-
-
-def require_owned(owner_key: str, workflow_id: str) -> str:
-    # 404 rather than 403, so other people's IDs aren't confirmed to exist.
-    if not workflow_id.startswith(prefix(owner_key)):
+def require_ours(workflow_id: str) -> str:
+    # 404 rather than 403, so other copies' IDs aren't confirmed to exist.
+    if not workflow_id.startswith(RUNS_PREFIX):
         raise HTTPException(404, "Not found")
     return workflow_id
 
@@ -154,12 +134,12 @@ async def healthz():
 
 
 @app.get("/api/config")
-async def get_config(owner_key: Owner):
+async def get_config():
     namespace = state.temporal.namespace
     return {
-        "owner": owner_key,
+        "owner_label": config.OWNER_LABEL,
         "models": allowlist(require_keys=False),
-        "defaults": RoleModels().model_dump(),
+        "settings": (await _settings_for(config.TASK_QUEUE)).model_dump(),
         "issues": ISSUES,
         "budget_usd": config.DEFAULT_BUDGET_USD,
         "temporal_ui": f"{config.temporal_ui_url(namespace)}",
@@ -169,22 +149,22 @@ async def get_config(owner_key: Owner):
     }
 
 
-@app.get("/api/source/pipeline")
-async def pipeline_source():
-    return Response(PIPELINE_SOURCE.read_text(), media_type="text/plain; charset=utf-8",
+@app.get("/api/source/{name}")
+async def pipeline_source(name: Literal["issue", "dependency", "review", "base"]):
+    """A run Workflow's source for the console's code panel; ``base`` holds what all three share."""
+    return Response((PIPELINE_DIR / SOURCE_FILES[name]).read_text(), media_type="text/plain; charset=utf-8",
                     headers={"Cache-Control": "max-age=60"})
 
 
-@app.get("/api/session")
-async def session_view(owner_key: Owner):
-    """The console's landing view: this session's runs, environments, workers."""
-    runs, env, workers = await asyncio.gather(_list_runs(owner_key), _environments(owner_key), _workers())
-    return {"runs": runs, "environments": env.model_dump(), "workers": workers,
-            "apps": f"/apps/{owner_key}"}
+@app.get("/api/overview")
+async def overview():
+    """The console's landing view: this copy's runs, environments, workers."""
+    runs, env, workers = await asyncio.gather(_list_runs(), _environments(), _workers())
+    return {"runs": runs, "environments": env.model_dump(), "workers": workers, "apps": "/apps/gh"}
 
 
-async def _list_runs(owner_key: str) -> list[dict]:
-    query = f"WorkflowType = 'IssueToProduction' AND WorkflowId STARTS_WITH '{prefix(owner_key)}run-'"
+async def _list_runs() -> list[dict]:
+    query = f"WorkflowType IN {RUN_TYPES} AND WorkflowId STARTS_WITH '{RUNS_PREFIX}'"
     runs = []
     async for execution in state.temporal.list_workflows(query, limit=20):
         memo = await execution.memo_value("run", default=None)
@@ -195,16 +175,16 @@ async def _list_runs(owner_key: str) -> list[dict]:
 
 
 def _run_summary(memo: dict) -> dict:
-    return {k: memo.get(k) for k in ("run_id", "title", "status", "version", "started_at", "ended_at", "usage", "proofs",
-                                     "issue_url", "pr_url")}
+    return {k: memo.get(k) for k in ("run_id", "kind", "title", "status", "version", "started_at", "ended_at", "usage",
+                                     "proofs", "issue_url", "pr_url")}
 
 
 @app.get("/api/runs/{run_id}")
-async def run_view(run_id: str, owner_key: Owner):
-    return await _run_view(owner_key, run_wf := run_workflow_id(owner_key, run_id)) or _not_found(run_wf)
+async def run_view(run_id: str):
+    return await _run_view(run_workflow_id(run_id)) or _not_found()
 
 
-async def _run_view(owner_key: str, workflow_id: str) -> dict | None:
+async def _run_view(workflow_id: str) -> dict | None:
     """Everything the run screen shows, from one cached group of free reads. Several viewers
     of the same run share one Describe a second."""
     cached = state.view_cache.get(workflow_id)
@@ -223,7 +203,7 @@ async def _run_view(owner_key: str, workflow_id: str) -> dict | None:
     agent_ids = [a.workflow_id for a in run.agents]
     agent_descriptions, env, workers, armed = await asyncio.gather(
         asyncio.gather(*(_describe_quietly(a) for a in agent_ids)),
-        _environments(owner_key), _workers(), faults.armed([workflow_id, *agent_ids]),
+        _environments(), _workers(), faults.armed([workflow_id, *agent_ids]),
     )
     retries = [*_retries(workflow_id, description)]
     for agent_id, agent_description in zip(agent_ids, agent_descriptions):
@@ -241,7 +221,7 @@ async def _run_view(owner_key: str, workflow_id: str) -> dict | None:
         "faults": armed,
         "environments": env.model_dump(),
         "workers": workers,
-        "apps": f"/apps/{owner_key}",
+        "apps": "/apps/gh",
         "read_at": time.time(),
     }
     state.view_cache[workflow_id] = (time.monotonic(), view)
@@ -271,8 +251,8 @@ def _retries(workflow_id: str, description) -> list[dict]:
     return found
 
 
-async def _environments(owner_key: str) -> EnvState:
-    wf_id = environments_id(owner_key)
+async def _environments() -> EnvState:
+    wf_id = ENVIRONMENTS_ID
     cached = state.env_cache.get(wf_id)
     if cached and time.monotonic() - cached[0] < ENV_CACHE_SECONDS:
         return cached[1]
@@ -294,7 +274,7 @@ async def _workers() -> list[dict]:
     return sorted(workers, key=lambda w: w.get("started_at", 0))
 
 
-def _not_found(_workflow_id: str):
+def _not_found():
     raise HTTPException(404, "Not found")
 
 
@@ -302,17 +282,17 @@ def _not_found(_workflow_id: str):
 
 
 @app.get("/api/runs/{run_id}/stream")
-async def run_stream(run_id: str, owner_key: Owner, request: Request):
+async def run_stream(run_id: str, request: Request):
     """One SSE stream per run view: run snapshots when they change, plus every agent's
     events (model calls, tool calls, approvals) relayed from Redis."""
-    workflow_id = run_workflow_id(owner_key, run_id)
+    workflow_id = run_workflow_id(run_id)
     queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=2000)
 
     async def snapshots():
         last = None
         attached: set[str] = set()
         while True:
-            view = await _run_view(owner_key, workflow_id)
+            view = await _run_view(workflow_id)
             if view is not None:
                 body = json.dumps(view, default=str)
                 comparable = json.dumps({**view, "read_at": 0}, default=str)
@@ -370,108 +350,84 @@ def _trim(value: Any, limit: int = 600) -> Any:
     return value
 
 
-# -- Writes --------------------------------------------------------------------------------
+# -- GitHub ----------------------------------------------------------------------------------
 
 
-class StartRun(BaseModel):
-    run_id: str
-    issue_title: str
-    issue_body: str
-    models: RoleModels = RoleModels()
-    autonomy: Literal["supervised", "auto"] = "auto"
-    budget_usd: float | None = None
+@app.post("/webhooks/github", include_in_schema=False)
+async def github_webhook(request: Request):
+    """Every event on the storefront repo. Public (no SSO), so nothing is trusted until GitHub's
+    signature checks out; then webhooks.route decides whether this copy acts on it."""
+    body = await request.body()
+    if not webhooks.verify(config.GITHUB_WEBHOOK_SECRET, body, request.headers.get("X-Hub-Signature-256")):
+        raise HTTPException(401, "Bad signature")
+    event = request.headers.get("X-GitHub-Event", "")
+    if event == "ping":
+        return {"ok": True}
+    done = await webhooks.handle(state.temporal, webhooks.route(event, json.loads(body)), _settings_for)
+    if done:
+        log.info("%s %s: %s", event, request.headers.get("X-GitHub-Delivery", ""), "; ".join(done))
+        state.view_cache.clear()
+    return {"done": done}
 
 
-@app.post("/api/runs")
-async def start_run(body: StartRun, owner_key: Owner):
-    workflow_id = run_workflow_id(owner_key, body.run_id)
-    for role, choice in body.models:
-        if choice.model not in allowlist(require_keys=False).get(choice.provider, ()):
-            raise HTTPException(400, f"{choice.key} isn't available for the {role}")
-    active = [r for r in await _list_runs(owner_key) if not r["closed"]]
-    if len(active) >= config.MAX_ACTIVE_RUNS_PER_USER:
-        raise HTTPException(429, f"You already have {len(active)} runs in progress. Finish or reset one first.")
-    request = RunRequest(
-        run_id=body.run_id, owner=owner_key, issue_title=body.issue_title[:200], issue_body=body.issue_body[:4000],
-        models=body.models, autonomy=body.autonomy, budget_usd=min(body.budget_usd or config.DEFAULT_BUDGET_USD, 25.0),
+async def _settings_for(task_queue: str) -> webhooks.RunSettings:
+    raw = await state.redis.get(SETTINGS_KEY.format(task_queue))
+    return webhooks.RunSettings.model_validate_json(raw) if raw else webhooks.RunSettings()
+
+
+# -- Demo machinery ------------------------------------------------------------------------------
+
+
+class Scenario(BaseModel):
+    kind: Literal["issue", "dependency", "review"]
+    issue_id: str | None = None  # one of issues.yaml, for kind "issue"
+    title: str | None = None  # or a custom issue
+    body: str | None = None
+    settings: webhooks.RunSettings | None = None  # kept for this copy's runs from now on
+
+
+SCENARIO_ACTIVITY = {"issue": "open_issue_for_copy", "dependency": "dispatch_bump", "review": "open_sample_pr"}
+
+
+@app.post("/api/scenarios")
+async def start_scenario(body: Scenario):
+    """Do on GitHub what a person would (open an issue, run the bump Action, open a PR), labeled
+    for this copy. The run itself starts when GitHub's webhook for it arrives."""
+    if body.settings:
+        for role, choice in body.settings.models:
+            if choice.model not in allowlist(require_keys=False).get(choice.provider, ()):
+                raise HTTPException(400, f"{choice.key} isn't available for the {role}")
+        await state.redis.set(SETTINGS_KEY.format(config.TASK_QUEUE), body.settings.model_dump_json())
+    title, text = "", ""
+    if body.kind == "issue":
+        prepared = next((i for i in ISSUES if i["id"] == body.issue_id), None)
+        title = (body.title or (prepared or {}).get("title") or "").strip()[:200]
+        text = (body.body or (prepared or {}).get("body") or "").strip()[:4000]
+        if not title:
+            raise HTTPException(400, "An issue needs a title")
+    # The web server holds no GitHub token, so this runs on the worker as a Standalone Activity.
+    started = await state.temporal.execute_activity(
+        SCENARIO_ACTIVITY[body.kind],
+        ScenarioInput(repo=config.GITHUB_SANDBOX_REPO, owner_label=config.OWNER_LABEL, title=title, body=text),
+        id=f"{RUNS_PREFIX}scenario-{body.kind}-{secrets.token_hex(4)}", task_queue=config.TASK_QUEUE,
+        result_type=ScenarioStarted, start_to_close_timeout=timedelta(seconds=30),
+        schedule_to_close_timeout=timedelta(minutes=1),
     )
+    return started.model_dump()
+
+
+@app.post("/api/runs/{run_id}/stop")
+async def stop_run(run_id: str):
+    """Cancel a run. It stops its agents and leaves its issue or PR on GitHub as it is."""
+    workflow_id = run_workflow_id(run_id)
     try:
-        await state.temporal.start_workflow(
-            "IssueToProduction", request, id=workflow_id, task_queue=config.TASK_QUEUE,
-            # A run waits for people, so it can last days; this bounds an abandoned one.
-            execution_timeout=timedelta(days=3),
-        )
+        await state.temporal.get_workflow_handle(workflow_id).cancel()
     except RPCError as err:
-        if err.status != RPCStatusCode.ALREADY_EXISTS:
-            raise
-    # The write returns what the screen shows next, so the browser needn't make a second call.
-    return {"run": RunState(run_id=body.run_id, version="", title=request.issue_title,
-                            budget_usd=request.budget_usd, started_at=time.time()).model_dump(mode="json"),
-            "workflow_id": workflow_id}
-
-
-class Decide(BaseModel):
-    gate: str
-    approve: bool
-    feedback: str | None = None
-    raise_budget_usd: float | None = None
-
-
-@app.post("/api/runs/{run_id}/decide")
-async def decide(run_id: str, body: Decide, owner_key: Owner):
-    decision = GateDecision(approve=body.approve, feedback=body.feedback, raise_budget_usd=body.raise_budget_usd)
-    return await _update_run(owner_key, run_id, "decide", {"gate": body.gate, "decision": decision.model_dump()})
-
-
-class Comment(BaseModel):
-    text: str
-
-
-@app.post("/api/runs/{run_id}/comment")
-async def comment(run_id: str, body: Comment, owner_key: Owner):
-    """A comment from the console, handled exactly like one left on the issue or the PR."""
-    return await _update_run(owner_key, run_id, "comment", {"text": body.text[:4000], "author": "presenter"})
-
-
-class Steer(BaseModel):
-    lane: str
-    text: str
-
-
-@app.post("/api/runs/{run_id}/steer")
-async def steer(run_id: str, body: Steer, owner_key: Owner):
-    """A message for one coding agent, given to it when its current turn ends."""
-    return await _update_run(owner_key, run_id, "steer", {"lane": body.lane, "text": body.text[:4000], "author": "presenter"})
-
-
-async def _update_run(owner_key: str, run_id: str, update: str, arg: dict) -> dict:
-    """Send an Update to the run and return the state it reports. The Workflow's validator
-    rejects anything that doesn't fit the run's current state; that comes back as a 409 with
-    the validator's own explanation."""
-    workflow_id = run_workflow_id(owner_key, run_id)
-    try:
-        run = await state.temporal.get_workflow_handle(workflow_id).execute_update(
-            update, arg, result_type=RunState, rpc_timeout=timedelta(seconds=10))
-    except WorkflowUpdateFailedError as err:
-        raise HTTPException(409, getattr(err.cause, "message", None) or str(err)) from err
-    except RPCError as err:
-        raise HTTPException(409, err.message) from err
+        if err.status == RPCStatusCode.NOT_FOUND:
+            _not_found()
+        raise
     state.view_cache.pop(workflow_id, None)
-    return {"run": run.model_dump(mode="json")}
-
-
-class Approve(BaseModel):
-    tool_id: str
-    approved: bool
-
-
-@app.post("/api/agents/{agent_workflow_id}/approve")
-async def approve_tool(agent_workflow_id: str, body: Approve, owner_key: Owner):
-    require_owned(owner_key, agent_workflow_id)
-    agent = AgentClient(state.temporal, agent_workflow_id, event_stream=EVENT_STREAM)
-    result = await agent.approve_tool(body.tool_id, approved=body.approved,
-                                      reason=None if body.approved else "The presenter denied this command.")
-    return {"ok": True, "result": str(result)}
+    return {"ok": True}
 
 
 class Fault(BaseModel):
@@ -481,8 +437,8 @@ class Fault(BaseModel):
 
 
 @app.post("/api/faults")
-async def inject_fault(body: Fault, owner_key: Owner):
-    require_owned(owner_key, body.workflow_id)
+async def inject_fault(body: Fault):
+    require_ours(body.workflow_id)
     await faults.arm(body.workflow_id, body.kind, attempts=max(1, min(body.attempts, 4)))
     return {"armed": body.model_dump()}
 
@@ -492,18 +448,18 @@ class BreakCanary(BaseModel):
 
 
 @app.post("/api/environments/break-canary")
-async def break_canary(body: BreakCanary, owner_key: Owner):
-    env = await state.temporal.get_workflow_handle(environments_id(owner_key)).execute_update(
+async def break_canary(body: BreakCanary):
+    env = await state.temporal.get_workflow_handle(ENVIRONMENTS_ID).execute_update(
         "break_canary", min(body.seconds, 600), result_type=EnvState)
-    state.env_cache.pop(environments_id(owner_key), None)
+    state.env_cache.pop(ENVIRONMENTS_ID, None)
     return {"environments": env.model_dump()}
 
 
 @app.post("/api/reset")
-async def reset(owner_key: Owner):
-    """Back to a clean slate for this session only: stop its runs, empty its environments,
-    clear its faults, and clean up its issues, PRs and branches on GitHub."""
-    runs = await _list_runs(owner_key)
+async def reset():
+    """Back to a clean slate for this copy only: stop its runs, empty its environments, clear its
+    faults, and close its labeled issues and PRs and delete their branches on GitHub."""
+    runs = await _list_runs()
     for run in runs:
         if not run["closed"]:
             try:
@@ -511,18 +467,15 @@ async def reset(owner_key: Owner):
             except RPCError:
                 pass
     try:
-        await state.temporal.get_workflow_handle(environments_id(owner_key)).execute_update("reset", result_type=EnvState)
+        await state.temporal.get_workflow_handle(ENVIRONMENTS_ID).execute_update("reset", result_type=EnvState)
     except RPCError:
         pass
-    agent_prefix = [r["workflow_id"] for r in runs]
-    await faults.clear(agent_prefix)
-    # The web server holds no GitHub token, so the clean-up runs on the worker as a Standalone
-    # Activity: no Workflow needed for a one-off job.
+    await faults.clear([r["workflow_id"] for r in runs])
     await state.temporal.start_activity(
         "cleanup_runs",
-        args=[{"repo": config.GITHUB_SANDBOX_REPO, "branch_prefix": f"runs/{config.TASK_QUEUE}/{owner_key}/",
-               "marker": "agentic-sdlc-run:"}],
-        id=f"{prefix(owner_key)}cleanup-{int(time.time())}",
+        CleanupInput(repo=config.GITHUB_SANDBOX_REPO, owner_label=config.OWNER_LABEL,
+                     branch_prefix=f"runs/{config.TASK_QUEUE}/"),
+        id=f"{RUNS_PREFIX}cleanup-{int(time.time())}",
         task_queue=config.TASK_QUEUE,
         start_to_close_timeout=timedelta(minutes=5),
         heartbeat_timeout=timedelta(seconds=60),
@@ -536,7 +489,7 @@ async def reset(owner_key: Owner):
 
 
 @app.get("/api/versions")
-async def get_versions(owner_key: Owner):
+async def get_versions():
     return await versions.describe(state.temporal)
 
 
@@ -545,7 +498,7 @@ class SetVersion(BaseModel):
 
 
 @app.post("/api/versions/current")
-async def set_version(body: SetVersion, owner_key: Owner):
+async def set_version(body: SetVersion):
     """Roll out a pipeline version: new runs start on it, in-flight runs stay pinned to theirs.
     This is a presenter control for the whole deployment (each crashable workspace has its own)."""
     try:
@@ -571,7 +524,7 @@ async def _keep_a_current_version() -> None:
 
 
 @app.post("/api/worker/{action}")
-async def worker_control(action: Literal["kill", "start"], owner_key: Owner):
+async def worker_control(action: Literal["kill", "start"]):
     if not config.SUPERVISOR_URL:
         raise HTTPException(409, "No local supervisor. In the catalog, use the workspace's crash controls.")
     response = await state.http.post(f"{config.SUPERVISOR_URL}/{action}")
@@ -581,13 +534,11 @@ async def worker_control(action: Literal["kill", "start"], owner_key: Owner):
 # -- Storefront environments ----------------------------------------------------------------
 
 
-@app.get("/apps/{owner_key}/{env}/{path:path}")
-async def serve_storefront(owner_key: str, env: Literal["staging", "prod", "canary"], path: str, request: Request):
-    """Serve a session's storefront exactly as committed: files are fetched from GitHub at an
+@app.get("/apps/gh/{env}/{path:path}")
+async def serve_storefront(env: Literal["staging", "prod", "canary"], path: str, request: Request):
+    """Serve this copy's storefront exactly as committed: files are fetched from GitHub at an
     immutable commit and cached. Agent-written code only ever runs in the visitor's browser."""
-    if not re.fullmatch(r"[0-9a-f]{16}", owner_key):
-        raise HTTPException(404)
-    environments = await _environments(owner_key)
+    environments = await _environments()
     response = Response()
     sha, is_canary = _route(environments, env, request, response)
     if sha is None:
@@ -597,11 +548,11 @@ async def serve_storefront(owner_key: str, env: Literal["staging", "prod", "cana
     if is_canary and environments.canary_fault_until > time.time() and path != "index.html":
         # Presenter fault, labeled in the console: the canary's assets fail to load.
         if not synthetic:
-            state.traffic[(owner_key, sha)][1] += 1
+            state.traffic[sha][1] += 1
         return Response("Injected fault: canary asset unavailable", status_code=503)
     status, content, media_type = await _fetch_file(sha, path)
     if is_canary and not synthetic:
-        counts = state.traffic[(owner_key, sha)]
+        counts = state.traffic[sha]
         counts[0] += path == "index.html"
         counts[1] += status >= 500
     if path == "index.html" and status == 200:
@@ -614,12 +565,12 @@ async def serve_storefront(owner_key: str, env: Literal["staging", "prod", "cana
     return result
 
 
-@app.post("/apps/{owner_key}/{env}/__beacon")
-async def storefront_beacon(owner_key: str, env: str, request: Request):
+@app.post("/apps/gh/{env}/__beacon")
+async def storefront_beacon(env: str, request: Request):
     """Browser errors reported by the storefront's telemetry.js count against the canary."""
-    environments = await _environments(owner_key)
-    if environments.canary_sha and request.cookies.get(f"canary-{owner_key}") == environments.canary_sha:
-        state.traffic[(owner_key, environments.canary_sha)][1] += 1
+    environments = await _environments()
+    if environments.canary_sha and request.cookies.get(CANARY_COOKIE) == environments.canary_sha:
+        state.traffic[environments.canary_sha][1] += 1
     return Response(status_code=204)
 
 
@@ -632,12 +583,10 @@ def _route(env: EnvState, name: str, request: Request, response: Response) -> tu
     if not env.canary_sha:
         return stable, False
     # Production: a sticky share of visitors gets the canary.
-    owner_key = request.path_params["owner_key"]
-    cookie = f"canary-{owner_key}"
-    assigned = request.cookies.get(cookie)
+    assigned = request.cookies.get(CANARY_COOKIE)
     if assigned not in (env.canary_sha, "stable"):
         assigned = env.canary_sha if secrets.randbelow(100) < env.canary_weight else "stable"
-        response.set_cookie(cookie, assigned, max_age=3600, samesite="lax")
+        response.set_cookie(CANARY_COOKIE, assigned, max_age=3600, samesite="lax")
     return (env.canary_sha, True) if assigned == env.canary_sha else (stable, False)
 
 
@@ -676,15 +625,15 @@ def _empty_page(env: str) -> str:
 
 
 async def _flush_traffic_forever() -> None:
-    """Send canary page loads and errors to each session's Environments Workflow in batches:
-    one Signal every few seconds, and only when there was traffic."""
+    """Send canary page loads and errors to the Environments Workflow in batches: one Signal
+    every few seconds, and only when there was traffic."""
     while True:
         await asyncio.sleep(TRAFFIC_FLUSH_SECONDS)
         batch, state.traffic = state.traffic, defaultdict(lambda: [0, 0])
-        for (owner_key, sha), (requests, errors) in batch.items():
+        for sha, (requests, errors) in batch.items():
             if requests or errors:
                 try:
-                    await state.temporal.get_workflow_handle(environments_id(owner_key)).signal(
+                    await state.temporal.get_workflow_handle(ENVIRONMENTS_ID).signal(
                         "record_traffic", TrafficBatch(sha=sha, requests=requests, errors=errors))
                 except RPCError:
                     pass

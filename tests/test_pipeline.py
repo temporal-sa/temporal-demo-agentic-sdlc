@@ -1,9 +1,11 @@
-"""Pipeline Workflow tests against a local Temporal dev server.
+"""Run Workflow tests against a local Temporal dev server.
 
 The agents and the outside world are replaced: fake agent Workflows stand in for the harness
-agents, and Activities with the real names return canned answers. What's under test is the
-orchestration: gates and the conversation with people, the parallel build, steering, the
-test-fix loop, the budget guard, scope changes, the canary decision and the rollback saga.
+agents, and Activities with the real names return canned answers. People act the way they do in
+the demo, on GitHub: each comment reaches the run as the ``github_comment`` Signal the webhook
+sends. What's under test is the orchestration: gates and commands, the conversation with people,
+the parallel build, steering, the test-fix loop, the budget guard, scope changes, the canary and
+the rollback saga, the dependency repair, and PR reviews.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from collections import Counter
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.client import Client, WorkflowHandle, WorkflowUpdateFailedError
+from temporalio.client import Client, WorkflowHandle
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -34,14 +36,21 @@ from agentic_sdlc.activities.github import (
     MergeResult,
     PrepareRunInput,
     PullRequest,
+    PullRequestInfo,
     PullRequestInput,
+    PullRequestRef,
     RevertInput,
     ReviewInput,
     RunRepo,
+    StatusInput,
+    UpdatePrInput,
 )
-from agentic_sdlc.models import GateDecision, Plan, RunRequest, RunState, Subtask, Usage, Workspace
+from agentic_sdlc.models import Plan, RunKind, RunRequest, RunState, Subtask, Usage, Workspace
+from agentic_sdlc.pipeline.base import GITHUB_REFS
+from agentic_sdlc.pipeline.dependency import DependencyRepair
 from agentic_sdlc.pipeline.environments import EnvState
-from agentic_sdlc.pipeline.workflow import CommentRequest, GateResponse, IssueToProduction, SteerRequest
+from agentic_sdlc.pipeline.review import PullRequestReview
+from agentic_sdlc.pipeline.workflow import IssueToProduction
 from agentic_sdlc.sandbox import workflow_runner
 
 PLAN = Plan(
@@ -50,6 +59,9 @@ PLAN = Plan(
     subtasks=[Subtask(id="logic", title="Discount logic", description="cart.js"),
               Subtask(id="ui", title="Discount field", description="app.js")],
 )
+ISSUE = 1
+BUMP_PR = 40
+PERSON_PR = 50
 
 
 class World:
@@ -67,16 +79,19 @@ class World:
         self.deploys: list[str] = []
         self.handlers: list[str] = []
         self.payloads: list[tuple[str, dict]] = []
-        self.github: list[HumanComment] = []  # comments people have left, returned by fetch_comments
-        self.pr_comments: list[str] = []
+        self.on_github: list[HumanComment] = []  # comments whose webhook never arrived; only a catch-up finds them
+        self.posts: list[tuple[int, str]] = []  # (issue or PR number, body) the run commented
+        self.checks: list[str] = []  # the agent's commit status, in order
+        self.pr_body = ""
 
     def activities(self):
         world = self
 
         @activity.defn(name="prepare_run")
-        async def prepare_run(_: PrepareRunInput) -> RunRepo:
+        async def prepare_run(input: PrepareRunInput) -> RunRepo:
             world.calls["prepare_run"] += 1
-            return RunRepo(repo="o/r", issue_number=1, issue_url="https://x/issues/1", base_branch="runs/x/main", base_sha="abc")
+            return RunRepo(repo="o/r", issue_number=input.issue_number, issue_url=f"https://x/issues/{input.issue_number}",
+                           base_branch="runs/x/main", base_sha="abc")
 
         @activity.defn(name="create_branches")
         async def create_branches(_: BranchesInput) -> None:
@@ -84,9 +99,7 @@ class World:
 
         @activity.defn(name="comment_on_issue")
         async def comment_on_issue(input: CommentInput) -> None:
-            world.calls["comment"] += 1
-            if input.issue_number != 1:
-                world.pr_comments.append(input.body)
+            world.posts.append((input.issue_number, input.body))
             if input.reopen:
                 world.calls["reopen"] += 1
 
@@ -100,6 +113,25 @@ class World:
             number = 1 + world.calls["open_pr"]
             return PullRequest(number=number, url=f"https://x/pull/{number}", head_sha="def")
 
+        @activity.defn(name="get_pull_request")
+        async def get_pull_request(ref: PullRequestRef) -> PullRequestInfo:
+            if ref.number == BUMP_PR:
+                return PullRequestInfo(number=ref.number, url=f"https://x/pull/{ref.number}",
+                                       title="Bump orbit-money from 1.0.0 to 2.0.0", body="Bumps orbit-money.",
+                                       author="github-actions[bot]", head_branch="dependency-bump/orbit-money-2.0.0-1",
+                                       head_sha="b1", base_branch="main", from_fork=False)
+            return PullRequestInfo(number=ref.number, url=f"https://x/pull/{ref.number}",
+                                   title="Add a bulk discount", body="10% off 3+ items", author="maya",
+                                   head_branch="review-sample/1", head_sha="s1", base_branch="main", from_fork=False)
+
+        @activity.defn(name="set_commit_status")
+        async def set_commit_status(input: StatusInput) -> None:
+            world.checks.append(input.state)
+
+        @activity.defn(name="update_pull_request")
+        async def update_pull_request(input: UpdatePrInput) -> None:
+            world.pr_body = input.body
+
         @activity.defn(name="close_pull_request")
         async def close_pull_request(_: ClosePrInput) -> None:
             world.calls["close_pr"] += 1
@@ -107,7 +139,7 @@ class World:
         @activity.defn(name="fetch_comments")
         async def fetch_comments(_: CommentsInput) -> list[HumanComment]:
             world.calls["fetch_comments"] += 1
-            return list(world.github)
+            return list(world.on_github)
 
         @activity.defn(name="get_diff")
         async def get_diff(_: DiffInput) -> str:
@@ -142,6 +174,10 @@ class World:
                 output = {"triage": {"kind": kind, "reason": f"classified as {kind}"}, "usage": usage}
             elif turn.handler == "plan":
                 output = {"plan": PLAN.model_dump(), "usage": usage}
+            elif turn.handler == "diagnose":
+                output = {"diagnosis": {"what_changed": "2.0 takes integer cents; roundCents is gone",
+                                        "what_broke": "cart.js imports roundCents", "root_cause": "cart.js uses the 1.x API",
+                                        "fix_plan": "Use toCents in cart.js"}, "usage": usage}
             elif turn.handler == "code":
                 if world.code_delay and turn.payload.get("feedback") is None:
                     await asyncio.sleep(world.code_delay)
@@ -153,9 +189,10 @@ class World:
 
         @activity.defn(name="run_branch_tests")
         async def run_branch_tests(_: Workspace) -> TestRun:
+            world.calls["tests"] += 1
             if world.failing_test_runs > 0:
                 world.failing_test_runs -= 1
-                return TestRun(passed=False, output="1 failing")
+                return TestRun(passed=False, output="not ok 1 - SyntaxError: does not provide an export named 'roundCents'")
             return TestRun(passed=True, output="ok")
 
         @activity.defn(name="apply_deployment")
@@ -168,9 +205,9 @@ class World:
             healthy = input.env == "staging" or world.canary_healthy
             return CheckResult(healthy=healthy, probes=10, failed_probes=0 if healthy else 6, detail="checked")
 
-        return [prepare_run, create_branches, comment_on_issue, merge_branches, open_pull_request, close_pull_request,
-                fetch_comments, get_diff, post_review, merge_pull_request, revert_merge, run_agent_turn,
-                run_branch_tests, apply_deployment, check_environment]
+        return [prepare_run, create_branches, comment_on_issue, merge_branches, open_pull_request, get_pull_request,
+                set_commit_status, update_pull_request, close_pull_request, fetch_comments, get_diff, post_review,
+                merge_pull_request, revert_merge, run_agent_turn, run_branch_tests, apply_deployment, check_environment]
 
 
 class _FakeAgentBase:
@@ -207,65 +244,81 @@ class FakeReviewer(_FakeAgentBase):
 
 
 FAKE_AGENTS = [FakePlanner, FakeCoder, FakeReviewer]
+RUNS = {"issue": IssueToProduction, "dependency": DependencyRepair, "review": PullRequestReview}
 
 
 @pytest.fixture
 async def env():
-    # A real dev server: the time-skipping test server doesn't support Workflow Updates well.
-    async with await WorkflowEnvironment.start_local(data_converter=pydantic_data_converter) as env:
+    # A real dev server with the search attribute the webhook finds runs by.
+    async with await WorkflowEnvironment.start_local(data_converter=pydantic_data_converter,
+                                                      search_attributes=[GITHUB_REFS]) as env:
         yield env
 
 
-# What a person does at a gate: ("approve", text), ("reject", text), ("console", text),
-# ("github", text) or ("wait", None) to say nothing and let a review window close.
-def default_policy(gate: str, occurrence: int):
-    return ("wait", None) if gate == "merge" else ("approve", None)
+# What people say on GitHub when a gate opens: a comment's text, several comments, or None to
+# say nothing (a review window closes by itself; a conversation goes quiet).
+def default_policy(gate: str, occurrence: int) -> str | None:
+    return {"plan": "/approve", "production": "/ship", "budget": "/continue"}.get(gate)
 
 
-async def run_pipeline(client: Client, world: World, *, policy=default_policy, autonomy="auto", budget=5.0,
-                       steer: tuple[str, str] | None = None) -> RunState:
+class Person:
+    """Comments on GitHub; the webhook delivers each one to the run as a Signal."""
+
+    def __init__(self, handle: WorkflowHandle, home: int):
+        self.handle, self.home, self.said = handle, home, 0
+
+    async def comment(self, text: str, number: int | None = None) -> None:
+        self.said += 1
+        await self.handle.signal("github_comment", HumanComment(
+            id=f"issue:{self.said}", number=number or self.home, author="maya", body=text,
+            url=f"https://x/c/{self.said}", created_at="2099-01-01T00:00:00Z"))
+
+
+async def run_scenario(client: Client, world: World, *, kind: RunKind = "issue", policy=default_policy,
+                       autonomy="auto", budget=5.0, steer: str | None = None, pr_number: int | None = None,
+                       idle_close_hours: float = 24.0, close_pr_when_quiet: bool = True) -> RunState:
     task_queue = f"test-{uuid.uuid4().hex[:6]}"
-    async with Worker(client, task_queue=task_queue, workflows=[IssueToProduction, *FAKE_AGENTS],
+    home = ISSUE if kind == "issue" else pr_number
+    async with Worker(client, task_queue=task_queue, workflows=[*RUNS.values(), *FAKE_AGENTS],
                       activities=world.activities(), workflow_runner=workflow_runner()):
         handle = await client.start_workflow(
-            IssueToProduction.run,
-            RunRequest(run_id="t1", owner="o", issue_title="Discount", issue_body="ORBIT10", autonomy=autonomy,
-                       budget_usd=budget, canary_bake_seconds=2, canary_check_seconds=1,
-                       review_window_seconds=2, github_poll_seconds=1),
-            id=f"run-{uuid.uuid4().hex[:6]}", task_queue=task_queue,
+            RUNS[kind].run,
+            RunRequest(run_id=f"{kind}-{home}", kind=kind, repo="o/r", title="Discount", body="ORBIT10",
+                       issue_number=ISSUE if kind == "issue" else None, pr_number=pr_number, autonomy=autonomy,
+                       budget_usd=budget, canary_bake_seconds=2, canary_check_seconds=1, review_window_seconds=2,
+                       idle_close_hours=idle_close_hours),
+            id=f"{task_queue}.gh.{kind}-{home}", task_queue=task_queue,
         )
-        driving = asyncio.create_task(_act(handle, world, policy, steer))
+        driving = asyncio.create_task(_act(handle, Person(handle, home), policy, steer, close_pr_when_quiet))
         try:
-            return await handle.result()
+            # A failing Workflow task retries forever; fail the test instead of hanging.
+            return await asyncio.wait_for(handle.result(), timeout=60)
         finally:
             driving.cancel()
 
 
-async def _act(handle: WorkflowHandle, world: World, policy, steer) -> None:
-    answered: set[tuple[str, float]] = set()
+async def _act(handle: WorkflowHandle, person: Person, policy, steer: str | None, close_pr_when_quiet: bool) -> None:
+    seen: set[tuple[str, float]] = set()
     occurrences: Counter[str] = Counter()
     steered = steer is None
     while True:
         await asyncio.sleep(0.2)
-        state = await handle.query(IssueToProduction.state)
-        if not steered and any(s.key == steer[0] and s.status == "active" for s in state.steps):
-            await handle.execute_update(IssueToProduction.steer, SteerRequest(lane=steer[0], text=steer[1]))
+        state: RunState = await handle.query("state", result_type=RunState)
+        if not steered and state.gate is None and any(s.lane and s.status == "active" for s in state.steps):
+            await person.comment(steer)
             steered = True
         gate = state.gate
-        if not gate or (gate.key, gate.waiting_since) in answered:
+        if not gate or (gate.key, gate.waiting_since) in seen:
             continue
-        answered.add((gate.key, gate.waiting_since))
+        seen.add((gate.key, gate.waiting_since))
         occurrences[gate.key] += 1
-        action, text = policy(gate.key, occurrences[gate.key])
-        if action in ("approve", "reject"):
-            decision = GateDecision(approve=action == "approve", feedback=text, raise_budget_usd=5)
-            await handle.execute_update(IssueToProduction.decide, GateResponse(gate=gate.key, decision=decision))
-        elif action == "console":
-            await handle.execute_update(IssueToProduction.comment, CommentRequest(text=text))
-        elif action == "github":
-            n = len(world.github) + 1
-            world.github.append(HumanComment(id=f"issue:{n}", number=1, author="maya", body=text,
-                                             url=f"https://x/c/{n}", created_at="2099-01-01T00:00:00Z"))
+        text = policy(gate.key, occurrences[gate.key])
+        number = int(gate.github_url.rsplit("/", 1)[-1]) if gate.github_url else None
+        if text is not None:
+            for comment in [text] if isinstance(text, str) else text:
+                await person.comment(comment, number)
+        elif gate.key == "conversation" and close_pr_when_quiet:
+            await handle.signal("pull_request_closed", number)
 
 
 def gate_log(log: list[str], inner=default_policy):
@@ -279,13 +332,17 @@ def payload(world: World, handler: str, nth: int = 0) -> dict:
     return [p for h, p in world.payloads if h == handler][nth]
 
 
-# -- The lifecycle ------------------------------------------------------------------------
+def step(state: RunState, key: str):
+    return next(s for s in state.steps if s.key == key)
 
 
-async def test_happy_path_ships_through_plan_and_production_gates(env):
+# -- Issue to production: the lifecycle ----------------------------------------------------
+
+
+async def test_happy_path_ships_through_approve_and_ship_on_github(env):
     world = World()
     gates: list[str] = []
-    state = await run_pipeline(env.client, world, policy=gate_log(gates))
+    state = await run_scenario(env.client, world, policy=gate_log(gates))
     assert state.status == "completed"
     assert world.deploys == ["staging", "canary", "promote"]
     assert world.calls["revert"] == 0
@@ -293,216 +350,302 @@ async def test_happy_path_ships_through_plan_and_production_gates(env):
     assert sorted(world.handlers) == sorted(
         ["planner:clarify", "planner:plan", "coder-logic:code", "coder-ui:code", "reviewer-quality:review"])
     assert gates == ["plan", "merge", "production"]
-    assert next(s for s in state.steps if s.key == "gate:clarify").status == "skipped"  # no questions
-    assert "Nobody commented" in next(s for s in state.steps if s.key == "gate:merge").note  # window closed
+    assert step(state, "gate:clarify").status == "skipped"  # no questions
+    assert "Nobody commented" in step(state, "gate:merge").note  # the review window closed by itself
+    assert "/approve" in step(state, "gate:plan").note and "/ship" in step(state, "gate:production").note
+    assert world.checks == ["pending", "success"]  # the agent's required check on the PR
+    assert any("Reply `/approve`" in body for n, body in world.posts if n == ISSUE)
+    assert [c.kind for c in state.conversation] == ["command", "command"]
     assert {p.criterion for p in state.proofs} >= {"D2", "D3", "D6"}
+
+
+async def test_webhook_finds_the_run_by_its_issue_and_pr(env):
+    world = World()
+    await run_scenario(env.client, world)
+    found = [w async for w in env.client.list_workflows("AgenticSdlcGitHubRefs = 'pr:2'")]
+    assert len(found) == 1
+    assert {"issue:1", "pr:2"} <= set(found[0].typed_search_attributes.get(GITHUB_REFS) or [])
+
+
+async def test_each_gate_reads_github_once_to_catch_up_and_never_polls(env):
+    world = World()
+    gates: list[str] = []
+    await run_scenario(env.client, world, policy=gate_log(gates))
+    assert world.calls["fetch_comments"] == len(gates)
+
+
+async def test_a_comment_whose_webhook_was_lost_is_caught_up_when_the_gate_opens(env):
+    world = World()
+    world.on_github.append(HumanComment(id="issue:99", number=ISSUE, author="sam", body="Keep it to one subtask",
+                                        url="https://x/c/99", created_at="2099-01-01T00:00:00Z"))
+    state = await run_scenario(env.client, world)
+    assert payload(world, "planner:plan", 1)["feedback"] == "Keep it to one subtask"
+    # Later gates read it again; it's handled once.
+    assert [c.id for c in state.conversation].count("issue:99") == 1
 
 
 async def test_unhealthy_canary_runs_the_rollback_saga(env):
     world = World(canary_healthy=False)
-    state = await run_pipeline(env.client, world)
+    state = await run_scenario(env.client, world)
     assert state.status == "rolled_back"
     assert world.deploys == ["staging", "canary", "rollback"]
     assert world.calls["revert"] == 1 and world.calls["reopen"] == 1
     assert any(p.criterion == "D4" for p in state.proofs)
-    assert next(s for s in state.steps if s.key == "canary").status == "failed"
+    assert step(state, "canary").status == "failed"
 
 
 async def test_failing_branch_tests_go_back_to_the_coder(env):
     world = World(failing_test_runs=1)
-    state = await run_pipeline(env.client, world)
+    state = await run_scenario(env.client, world)
     assert state.status == "completed"
     assert sum(1 for h in world.handlers if h.endswith(":code")) == 3  # two coders, one fix turn
 
 
-async def test_budget_guard_pauses_until_a_person_raises_it(env):
+async def test_budget_guard_pauses_until_someone_replies_continue(env):
     gates: list[str] = []
     world = World(turn_cost=0.6)
-    state = await run_pipeline(env.client, world, policy=gate_log(gates), budget=1.0)
+    state = await run_scenario(env.client, world, policy=gate_log(gates), budget=1.0)
     assert "budget" in gates
     assert state.budget_usd > 1.0
     assert state.status == "completed"
+    assert any("Reply `/continue`" in body for _, body in world.posts)
 
 
-async def test_supervised_autonomy_waits_for_merge_approval(env):
-    gates: list[str] = []
-    approve = lambda gate, n: ("approve", None)  # noqa: E731
-    await run_pipeline(env.client, World(), policy=gate_log(gates, approve), autonomy="supervised")
-    assert gates == ["plan", "merge", "production"]
+async def test_stop_at_the_budget_fails_the_run(env):
+    world = World(turn_cost=0.6)
+
+    def policy(gate, n):
+        return "/stop" if gate == "budget" else default_policy(gate, n)
+
+    with pytest.raises(Exception):
+        await run_scenario(env.client, world, policy=policy, budget=1.0)
 
 
-# -- People steering the agents -------------------------------------------------------------
-
-
-async def test_clarifying_questions_answered_in_the_console_reach_the_plan(env):
-    world = World(questions=["Where does the code field go?"])
+async def test_supervised_autonomy_waits_for_merge_on_the_pr(env):
     gates: list[str] = []
 
     def policy(gate, n):
-        return ("approve", "Under the cart totals") if gate == "clarify" else default_policy(gate, n)
+        return "/merge" if gate == "merge" else default_policy(gate, n)
 
-    state = await run_pipeline(env.client, world, policy=gate_log(gates, policy))
-    assert gates[0] == "clarify"
-    assert payload(world, "planner:plan")["clarifications"] == "Under the cart totals"
-    assert state.conversation[0].kind == "answer" and state.conversation[0].source == "console"
+    state = await run_scenario(env.client, World(), policy=gate_log(gates, policy), autonomy="supervised")
+    assert gates == ["plan", "merge", "production"]
+    assert "/merge" in step(state, "gate:merge").note
+
+
+async def test_a_command_the_gate_isnt_waiting_for_is_noted_not_obeyed(env):
+    world = World()
+
+    def policy(gate, n):
+        if gate == "plan":
+            return ["/ship", "/approve"]
+        return default_policy(gate, n)
+
+    gates: list[str] = []
+    state = await run_scenario(env.client, world, policy=gate_log(gates, policy))
+    noted = state.conversation[0]
+    assert (noted.kind, noted.outcome) == ("noted", "Noted; the run is waiting for /approve")
+    assert world.handlers.count("planner:plan") == 1  # still the same plan; /approve came later
     assert state.status == "completed"
+
+
+# -- Issue to production: people steering the agents ----------------------------------------
 
 
 async def test_clarifying_questions_answered_on_the_issue_reach_the_plan(env):
     world = World(questions=["Case sensitive?"])
+    gates: list[str] = []
 
     def policy(gate, n):
-        return ("github", "No, ignore case") if gate == "clarify" else default_policy(gate, n)
+        return "No, ignore case" if gate == "clarify" else default_policy(gate, n)
 
-    state = await run_pipeline(env.client, world, policy=policy)
+    state = await run_scenario(env.client, world, policy=gate_log(gates, policy))
+    assert gates[0] == "clarify"
     assert payload(world, "planner:plan")["clarifications"] == "No, ignore case"
     answer = state.conversation[0]
-    assert (answer.source, answer.author, answer.kind, answer.status) == ("github", "maya", "answer", "addressed")
+    assert (answer.author, answer.kind, answer.status) == ("maya", "answer", "addressed")
+    assert any("Case sensitive?" in body for _, body in world.posts)
 
 
-async def test_plan_comment_on_the_issue_revises_the_plan(env):
+async def test_skip_lets_the_planner_decide(env):
+    world = World(questions=["Case sensitive?"])
+
+    def policy(gate, n):
+        return "/skip" if gate == "clarify" else default_policy(gate, n)
+
+    state = await run_scenario(env.client, world, policy=policy)
+    assert payload(world, "planner:plan")["clarifications"] is None
+    assert state.status == "completed"
+
+
+async def test_a_plan_comment_on_the_issue_revises_the_plan(env):
     world = World()
 
     def policy(gate, n):
         if gate == "plan" and n == 1:
-            return ("github", "Keep it to one subtask")
+            return "Keep it to one subtask"
         return default_policy(gate, n)
 
-    state = await run_pipeline(env.client, world, policy=policy)
+    state = await run_scenario(env.client, world, policy=policy)
     assert world.handlers.count("planner:plan") == 2
     assert payload(world, "planner:plan", 1)["feedback"] == "Keep it to one subtask"
+    assert state.conversation[0].kind == "plan_feedback"
     assert any(p.criterion == "D7" for p in state.proofs)
 
 
-async def test_rejected_plan_goes_back_to_the_planner(env):
-    world = World()
-
-    def policy(gate, n):
-        return ("reject", "smaller") if gate == "plan" and n == 1 else default_policy(gate, n)
-
-    state = await run_pipeline(env.client, world, policy=policy)
-    assert state.status == "completed"
-    assert world.handlers.count("planner:plan") == 2
-
-
-async def test_pr_feedback_on_github_is_addressed_and_re_reviewed(env):
+async def test_pr_feedback_is_addressed_and_re_reviewed(env):
     world = World()
 
     def policy(gate, n):
         if gate == "merge" and n == 1:
-            return ("github", "The error message should say the code is invalid")
+            return "The error message should say the code is invalid"
         return default_policy(gate, n)
 
-    state = await run_pipeline(env.client, world, policy=policy)
+    state = await run_scenario(env.client, world, policy=policy)
     assert state.status == "completed"
     assert "planner:triage" in world.handlers
     assert payload(world, "coder-integration:code")["subtask"]["id"] == "pr-feedback"
     assert world.handlers.count("reviewer-quality:review") == 2  # reviewed again after the fix
-    assert any("Addressed by the coding agent" in body for body in world.pr_comments)
-    item = state.conversation[0]
-    assert (item.kind, item.status, item.source) == ("feedback", "addressed", "github")
+    assert any("Addressed by the coding agent" in body for n, body in world.posts if n == 2)
+    item = next(c for c in state.conversation if c.kind == "feedback")
+    assert item.status == "addressed"
+    assert world.checks == ["pending", "success", "pending", "success"]
     assert world.calls["merge"] == 1 and world.calls["close_pr"] == 0
-    assert any(p.criterion == "D7" for p in state.proofs)
 
 
-async def test_scope_change_on_the_pr_goes_back_to_planning(env):
+async def test_a_scope_change_on_the_pr_goes_back_to_planning(env):
     world = World()
     gates: list[str] = []
 
     def policy(gate, n):
         if gate == "merge" and n == 1:
-            return ("console", "Also support a FREESHIP code")
+            return "Also support a FREESHIP code"
         return default_policy(gate, n)
 
-    state = await run_pipeline(env.client, world, policy=gate_log(gates, policy))
+    state = await run_scenario(env.client, world, policy=gate_log(gates, policy))
     assert state.status == "completed"
     assert world.calls["close_pr"] == 1 and world.calls["open_pr"] == 2
     assert state.plan_revision == 2
-    assert gates == ["plan", "merge", "plan", "merge", "production"]  # the plan needed approval again
+    assert gates == ["plan", "merge", "plan", "merge", "production"]  # the plan needed /approve again
     assert "FREESHIP" in payload(world, "planner:plan", 1)["feedback"]
     assert "coder-logic-r2:code" in world.handlers  # fresh agents on fresh branches
-    assert state.conversation[0].kind == "scope_change"
+    assert next(c for c in state.conversation if c.kind == "scope_change")
     assert any(p.criterion == "D7" for p in state.proofs)
 
 
-async def test_merge_rejection_needs_a_reason_and_becomes_feedback(env):
-    world = World()
-    refused: list[str] = []
-
-    def policy(gate, n):
-        if gate == "merge" and n == 1:
-            return ("reject", "Rename the button to Apply code")
-        if gate == "merge":
-            return ("approve", None)
-        return default_policy(gate, n)
-
-    task_queue = f"test-{uuid.uuid4().hex[:6]}"
-    async with Worker(env.client, task_queue=task_queue, workflows=[IssueToProduction, *FAKE_AGENTS],
-                      activities=world.activities(), workflow_runner=workflow_runner()):
-        handle = await env.client.start_workflow(
-            IssueToProduction.run,
-            RunRequest(run_id="t1", owner="o", issue_title="D", issue_body="x", autonomy="supervised",
-                       github_poll_seconds=1, canary_bake_seconds=1, canary_check_seconds=1),
-            id=f"run-{uuid.uuid4().hex[:6]}", task_queue=task_queue)
-        while (await handle.query(IssueToProduction.state)).gate is None or \
-                (await handle.query(IssueToProduction.state)).gate.key != "merge":
-            if (g := (await handle.query(IssueToProduction.state)).gate) is not None and g.key == "plan":
-                await handle.execute_update(IssueToProduction.decide, GateResponse(gate="plan", decision=GateDecision(approve=True)))
-            await asyncio.sleep(0.2)
-        try:
-            await handle.execute_update(IssueToProduction.decide, GateResponse(gate="merge", decision=GateDecision(approve=False)))
-        except WorkflowUpdateFailedError as err:
-            refused.append(err.cause.message)
-        driving = asyncio.create_task(_act(handle, world, policy, None))
-        try:
-            state = await handle.result()
-        finally:
-            driving.cancel()
-    assert refused and "Say what should change" in refused[0]
-    assert payload(world, "coder-integration:code")["subtask"]["description"].endswith("Rename the button to Apply code")
-    assert state.status == "completed"
-
-
-async def test_rejecting_production_stops_without_touching_production(env):
+async def test_stop_at_production_keeps_production_untouched(env):
     world = World()
 
     def policy(gate, n):
-        return ("reject", "Not before the holiday freeze") if gate == "production" else default_policy(gate, n)
+        return "/stop Not before the holiday freeze" if gate == "production" else default_policy(gate, n)
 
-    state = await run_pipeline(env.client, world, policy=policy)
+    state = await run_scenario(env.client, world, policy=policy)
     assert state.status == "stopped"
     assert world.deploys == ["staging"]
-    assert next(s for s in state.steps if s.key == "canary").status == "skipped"
+    assert step(state, "canary").status == "skipped"
+    assert any("Not before the holiday freeze" in body for _, body in world.posts)
 
 
-async def test_steering_a_coder_mid_task_adds_a_turn_without_restarting(env):
+async def test_a_comment_on_the_issue_while_coders_work_steers_all_of_them(env):
     world = World(code_delay=1.5)
-    state = await run_pipeline(env.client, world, steer=("code:logic", "Use a constant for the 10%"))
-    turns = [p for h, p in world.payloads if h == "coder-logic:code"]
-    assert len(turns) == 2
-    assert "Use a constant for the 10%" in turns[1]["feedback"]
+    state = await run_scenario(env.client, world, steer="Use a constant for the 10%")
+    for coder in ("coder-logic:code", "coder-ui:code"):
+        turns = [p for h, p in world.payloads if h == coder]
+        assert len(turns) == 2
+        assert "Use a constant for the 10%" in turns[1]["feedback"]
     steer = next(f for f in state.conversation if f.kind == "steer")
     assert steer.status == "addressed"
     assert any(p.criterion == "D7" for p in state.proofs)
     assert state.status == "completed"
 
 
-async def test_comments_are_refused_when_no_one_is_listening(env):
-    world = World(code_delay=1.5)
-    task_queue = f"test-{uuid.uuid4().hex[:6]}"
-    async with Worker(env.client, task_queue=task_queue, workflows=[IssueToProduction, *FAKE_AGENTS],
-                      activities=world.activities(), workflow_runner=workflow_runner()):
-        handle = await env.client.start_workflow(
-            IssueToProduction.run, RunRequest(run_id="t1", owner="o", issue_title="D", issue_body="x"),
-            id=f"run-{uuid.uuid4().hex[:6]}", task_queue=task_queue)
-        await asyncio.sleep(0.5)
-        with pytest.raises(WorkflowUpdateFailedError):
-            await handle.execute_update(IssueToProduction.steer, SteerRequest(lane="code:nope", text="hi"))
-        await handle.terminate()
+# -- Dependency repair ----------------------------------------------------------------------
+
+
+async def test_a_compatible_bump_gets_a_green_check_and_no_agents(env):
+    world = World()
+    state = await run_scenario(env.client, world, kind="dependency", pr_number=BUMP_PR)
+    assert state.status == "completed"
+    assert world.checks == ["pending", "success"]
+    assert world.handlers == []
+    assert world.pr_body == ""
+    assert any("no code changes are needed" in body for n, body in world.posts if n == BUMP_PR)
+    assert step(state, "diagnose").status == "skipped"
+
+
+async def test_a_breaking_bump_is_diagnosed_fixed_explained_and_reviewed(env):
+    world = World(failing_test_runs=1)
+    gates: list[str] = []
+    state = await run_scenario(env.client, world, kind="dependency", pr_number=BUMP_PR, policy=gate_log(gates))
+    assert state.status == "completed"
+    # Diagnose before touching anything, then fix on the bump branch, then a second model reviews.
+    assert world.handlers == ["coder:diagnose", "coder:code", "reviewer-quality:review"]
+    diagnose = payload(world, "coder:diagnose")
+    assert (diagnose["package"], diagnose["from_version"], diagnose["to_version"]) == ("orbit-money", "1.0.0", "2.0.0")
+    assert "roundCents" in diagnose["test_output"]
+    assert payload(world, "coder:code")["subtask"]["description"] == "Use toCents in cart.js"  # the diagnosis's fix plan
+    for section in ("## What changed in orbit-money 2.0.0", "## What broke", "## What we changed, and why",
+                    "## How to verify", "Original description"):
+        assert section in world.pr_body
+    assert any("Why orbit-money 2.0.0 breaks the build" in body for n, body in world.posts if n == BUMP_PR)
+    assert world.checks == ["pending", "success"]
+    assert state.diagnosis is not None
+    assert gates == ["conversation"]  # then it listens to the PR until it closes
+
+
+async def test_a_comment_on_the_repaired_bump_goes_to_a_coder_and_back_to_review(env):
+    world = World(failing_test_runs=1)
+
+    def policy(gate, n):
+        return "Add a test for a zero total" if n == 1 else None
+
+    state = await run_scenario(env.client, world, kind="dependency", pr_number=BUMP_PR, policy=policy)
+    assert state.status == "completed"
+    assert world.handlers.count("reviewer-quality:review") == 2
+    assert payload(world, "coder:code", 1)["subtask"]["id"] == "pr-feedback"
+    assert world.checks == ["pending", "success", "pending", "success"]
+
+
+# -- PR review ------------------------------------------------------------------------------
+
+
+async def test_a_pr_review_fails_the_check_then_fixes_on_request(env):
+    world = World(review="request_changes")
+
+    def policy(gate, n):
+        return "Please fix the rounding" if n == 1 else None
+
+    state = await run_scenario(env.client, world, kind="review", pr_number=PERSON_PR, policy=policy)
+    assert state.status == "completed"
+    assert world.handlers == ["reviewer-quality:review", "planner:triage", "coder:code", "reviewer-quality:review"]
+    assert world.checks == ["pending", "failure", "pending", "success"]
+    assert any("Addressed by the coding agent" in body for n, body in world.posts if n == PERSON_PR)
+
+
+async def test_an_out_of_scope_request_on_a_pr_is_answered_not_built(env):
+    world = World()
+
+    def policy(gate, n):
+        return "Also add gift cards" if n == 1 else None
+
+    state = await run_scenario(env.client, world, kind="review", pr_number=PERSON_PR, policy=policy)
+    assert "coder:code" not in world.handlers
+    assert any("outside this PR's scope" in body for _, body in world.posts)
+    assert state.conversation[0].kind == "scope_change"
+
+
+async def test_a_quiet_pr_is_closed_after_the_idle_period(env):
+    world = World()
+    state = await run_scenario(env.client, world, kind="review", pr_number=PERSON_PR, idle_close_hours=1 / 3600,
+                               close_pr_when_quiet=False)
+    assert state.status == "completed"
+    assert world.calls["close_pr"] == 1
+
+
+# -- Environments ---------------------------------------------------------------------------
 
 
 async def test_overlapping_canaries_promote_their_own_commits(env):
-    """Two runs in one session: the second canary takes the slot before the first promotes."""
+    """Two runs in one copy: the second canary takes the slot before the first promotes."""
     from agentic_sdlc.pipeline.environments import DeployRequest, Environments
 
     task_queue = f"test-{uuid.uuid4().hex[:6]}"

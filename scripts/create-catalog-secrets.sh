@@ -30,12 +30,13 @@ upsert() {  # name, json, description
 
 upsert "$PREFIX/github" \
   "$(python3 -c 'import json,sys; print(json.dumps({"GITHUB_TOKEN": sys.argv[1]}))' "$GITHUB_TOKEN")" \
-  "Fine-grained PAT for temporal-sa/agentic-sdlc-storefront (contents, PRs, issues read/write). Expires 2027-10-22."
+  "Fine-grained PAT for temporal-sa/agentic-sdlc-storefront (contents, PRs, issues, commit statuses, actions read/write). Expires 2027-10-22."
 
 if [[ "$ROTATE_RUNTIME" == "1" ]]; then
   upsert "$PREFIX/runtime" \
-    "$(python3 -c 'import json,secrets; print(json.dumps({"REDIS_PASSWORD": secrets.token_urlsafe(32), "SESSION_SECRET": secrets.token_urlsafe(48)}))')" \
-    "Redis password and session-cookie signing secret for the agentic-sdlc demo."
+    "$(python3 -c 'import json,secrets; print(json.dumps({"REDIS_PASSWORD": secrets.token_urlsafe(32), "GITHUB_WEBHOOK_SECRET": secrets.token_hex(32)}))')" \
+    "Redis password, and the secret GitHub signs the storefront repo's webhook deliveries with, for the agentic-sdlc demo."
+  echo "The webhook secret changed: run scripts/setup-github.sh --webhook-url <hosted URL>/webhooks/github to update GitHub's copy."
 fi
 
 # Show only the key names, to confirm the shape the DemoProject requires.

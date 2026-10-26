@@ -44,6 +44,20 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 REDIS_KEY_PREFIX = f"agent-events:{TASK_QUEUE}"
 
 GITHUB_SANDBOX_REPO = os.environ.get("GITHUB_SANDBOX_REPO", "temporal-sa/agentic-sdlc-storefront")
+
+# Every copy of the demo (the hosted one, each crashable workspace, each laptop) shares one
+# GitHub repo. Issues and PRs carry a label naming the copy that owns them, and each copy only
+# acts on its own. A laptop sets OWNER_LABEL (scripts/dev.py does); the hosted copy and its
+# workspaces derive theirs from the task queue.
+BASE_TASK_QUEUE = os.environ.get("BASE_TASK_QUEUE", "agentic-sdlc")
+OWNER_LABEL_PREFIX = "agentic-sdlc:"
+OWNER_LABEL = os.environ.get("OWNER_LABEL") or f"{OWNER_LABEL_PREFIX}{TASK_QUEUE}"
+# The hosted copy also handles unlabeled items and starts workspace-owned runs on their queues,
+# since GitHub delivers webhooks to the hosted URL only.
+IS_LOCAL_COPY = bool(os.environ.get("OWNER_LABEL"))
+GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+MAX_ACTIVE_GITHUB_RUNS = int(os.environ.get("MAX_ACTIVE_GITHUB_RUNS", "3"))
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://localhost:8000")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 BASELINE_REF = os.environ.get("GITHUB_BASELINE_REF", "baseline")
 
@@ -53,11 +67,6 @@ WORKDIR_ROOT = Path(os.environ.get("WORKDIR_ROOT", Path(__file__).resolve().pare
 
 # Cost guards for a hosted demo where every run makes real model calls.
 DEFAULT_BUDGET_USD = float(os.environ.get("RUN_BUDGET_USD", "3.00"))
-MAX_ACTIVE_RUNS_PER_USER = int(os.environ.get("MAX_ACTIVE_RUNS_PER_USER", "2"))
-
-TRUST_AUTH_HEADERS = os.environ.get("TRUST_AUTH_HEADERS", "").lower() == "true"
-SESSION_SECRET = os.environ.get("SESSION_SECRET", "local-dev-secret-change-me")
-DEV_USER = os.environ.get("DEV_USER", "local-presenter")
 
 # Local only: the supervisor started by scripts/dev listens here for "kill the worker".
 SUPERVISOR_URL = os.environ.get("SUPERVISOR_URL", "")

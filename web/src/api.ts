@@ -11,27 +11,33 @@ export interface Step {
   started_at: number | null; ended_at: number | null; lane: string | null; agent_workflow_id: string | null;
 }
 export interface Gate {
-  key: "clarify" | "plan" | "merge" | "production" | "budget"; question: string; context: string; waiting_since: number;
-  questions: string[]; closes_at: number | null; github_url: string | null;
+  key: "clarify" | "plan" | "merge" | "production" | "budget" | "conversation"; question: string; context: string; waiting_since: number;
+  questions: string[]; commands: string[]; closes_at: number | null; github_url: string | null;
 }
 export interface Feedback {
-  id: string; source: "console" | "github"; author: string; text: string; url: string | null; at: number; stage: string;
-  kind: "answer" | "plan_feedback" | "feedback" | "scope_change" | "steer" | null; reason: string;
+  id: string; source: "github"; author: string; text: string; url: string | null; at: number; stage: string;
+  kind: "answer" | "plan_feedback" | "feedback" | "scope_change" | "steer" | "command" | "noted" | null; reason: string;
   status: "received" | "working" | "addressed" | "replanning" | "queued"; outcome: string;
 }
 export interface AgentRef { role: string; workflow_id: string; model: string; lane: string | null }
 export interface Proof { criterion: Criterion; detail: string; at: number }
 export interface Subtask { id: string; title: string; description: string; files: string[] }
 export interface Plan { summary: string; acceptance_criteria: string[]; subtasks: Subtask[] }
-export interface Review { verdict: "approve" | "request_changes"; summary: string; comments: { file: string; comment: string }[] }
+export interface Review { verdict: "approve" | "request_changes"; summary: string; comments: { file: string; line?: number | null; comment: string }[] }
+export interface Diagnosis { what_changed: string; what_broke: string; root_cause: string; fix_plan: string }
+
+/** What started the run on GitHub: a labeled issue, a dependency-bump PR, or a person's PR. */
+export type RunKind = "issue" | "dependency" | "review";
+export type CommitState = "pending" | "success" | "failure" | "error";
 
 export interface RunState {
-  run_id: string; version: string; title: string;
+  run_id: string; kind: RunKind; version: string; title: string;
   status: "running" | "waiting" | "completed" | "rolled_back" | "failed" | "cancelled" | "stopped";
   steps: Step[]; gate: Gate | null; agents: AgentRef[]; usage: Usage; budget_usd: number;
   issue_url: string | null; pr_url: string | null; revert_pr_url?: string | null; plan: Plan | null; review: Review | null;
   staging_sha: string | null; canary_sha: string | null; proofs: Proof[]; started_at: number; ended_at: number | null;
   conversation: Feedback[]; plan_revision: number;
+  check: CommitState | null; check_description: string; diagnosis: Diagnosis | null;
 }
 
 export interface Retry { workflow_id: string; activity: string; attempt: number; last_failure: string; next_attempt_in: number | null }
@@ -48,14 +54,18 @@ export interface RunView {
 }
 
 export interface RunSummary {
-  run_id: string; title: string; status: RunState["status"]; version: string; started_at: number;
+  run_id: string; kind: RunKind; title: string; status: RunState["status"]; version: string; started_at: number;
   ended_at: number | null; usage: Usage; workflow_id: string; temporal_run_id: string; closed: boolean;
+  issue_url: string | null; pr_url: string | null;
 }
-export interface SessionView { runs: RunSummary[]; environments: Environments; workers: Worker[]; apps: string }
+/** Everything this copy of the demo is running: its runs, environments and workers. */
+export interface Overview { runs: RunSummary[]; environments: Environments; workers: Worker[]; apps: string }
 
 export interface Issue { id: string; title: string; body: string }
+export type Autonomy = "auto" | "supervised";
+export interface RunSettings { models: RoleModels; autonomy: Autonomy }
 export interface Config {
-  owner: string; models: Record<string, string[]>; defaults: RoleModels; issues: Issue[]; budget_usd: number;
+  owner_label: string; models: Record<string, string[]>; settings: RunSettings; issues: Issue[]; budget_usd: number;
   temporal_ui: string; repo: string; local_controls: boolean; task_queue: string;
 }
 
@@ -83,11 +93,6 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
     throw new Error(detail || `${response.status}`);
   }
   return response.json() as Promise<T>;
-}
-
-export function randomId(prefix = "run"): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(3));
-  return `${prefix}-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
 export function money(n: number): string {

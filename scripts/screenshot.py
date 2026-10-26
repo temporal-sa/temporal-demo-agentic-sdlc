@@ -1,6 +1,6 @@
-"""Screenshot the console as a given presenter session, for visual review.
+"""Screenshot the console, for visual review.
 
-    uv run --with playwright python scripts/screenshot.py out.png [--subject NAME] [--act N] [--run RUN_ID]
+    uv run --with playwright python scripts/screenshot.py out.png [--act N] [--run RUN_ID]
 
 Uses the installed Google Chrome, so no browser download is needed.
 """
@@ -8,14 +8,10 @@ Uses the installed Google Chrome, so no browser download is needed.
 import argparse
 import asyncio
 
-from itsdangerous import URLSafeSerializer
 from playwright.async_api import async_playwright
-
-from agentic_sdlc import config
 
 parser = argparse.ArgumentParser()
 parser.add_argument("out")
-parser.add_argument("--subject", default="screenshot-presenter")
 parser.add_argument("--base", default="http://localhost:8000")
 parser.add_argument("--act", type=int, default=4)
 parser.add_argument("--run", default=None)
@@ -26,11 +22,9 @@ args = parser.parse_args()
 
 
 async def main() -> None:
-    cookie = URLSafeSerializer(config.SESSION_SECRET, salt="session").dumps(args.subject)
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel="chrome")
         context = await browser.new_context(viewport={"width": args.width, "height": args.height})
-        await context.add_cookies([{"name": "sdlc_session", "value": cookie, "url": args.base}])
         page = await context.new_page()
         await page.goto(args.base + (f"/?run={args.run}" if args.run else "/"))
         await page.wait_for_timeout(2500)

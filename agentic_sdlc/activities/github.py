@@ -1,4 +1,5 @@
-"""GitHub Activities: issues, branches, merges, pull requests and reverts on the sandbox repo.
+"""GitHub Activities: issues, branches, merges, pull requests, reviews, commit statuses and
+reverts on the sandbox repo, plus the scenario triggers the console uses.
 
 Each one is safe to retry. Creates check for what an earlier attempt already made, so a
 retried Activity never opens a second issue or pull request. Rate limits come back as an
@@ -13,6 +14,8 @@ import time
 from datetime import timedelta
 
 import httpx
+from typing import Literal
+
 from pydantic import BaseModel
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -36,10 +39,9 @@ class RunRepo(BaseModel):
 
 
 class PrepareRunInput(BaseModel):
-    run_id: str
+    repo: str
+    issue_number: int
     branch_prefix: str
-    title: str
-    body: str
 
 
 class BranchesInput(BaseModel):
@@ -136,8 +138,59 @@ class RevertInput(BaseModel):
 
 class CleanupInput(BaseModel):
     repo: str
+    owner_label: str
     branch_prefix: str
-    marker: str
+
+
+class PullRequestRef(BaseModel):
+    repo: str
+    number: int
+
+
+class PullRequestInfo(BaseModel):
+    number: int
+    url: str
+    title: str
+    body: str
+    author: str
+    head_branch: str
+    head_sha: str
+    base_branch: str
+    from_fork: bool
+
+
+class StatusInput(BaseModel):
+    repo: str
+    branch: str  # the status goes on the branch's current head commit
+    state: Literal["pending", "success", "failure", "error"]
+    description: str
+    target_url: str | None = None
+
+
+class UpdatePrInput(BaseModel):
+    repo: str
+    number: int
+    body: str
+
+
+class ScenarioInput(BaseModel):
+    """Start a scenario the way a person would on GitHub, labeled for one copy of the demo."""
+
+    repo: str
+    owner_label: str
+    title: str = ""
+    body: str = ""
+
+
+class ScenarioStarted(BaseModel):
+    url: str  # the issue, the PR, or the Actions run that will open the PR
+    kind: str
+
+
+# The required check the agent sets on pull requests; a ruleset on main requires it.
+STATUS_CONTEXT = "agentic-sdlc/agent-review"
+BUMP_WORKFLOW = "dependency-bump.yml"
+SAMPLE_PR_BRANCH = "samples/discount-rounding"
 
 
 class GitHubActivities:
@@ -149,26 +202,21 @@ class GitHubActivities:
             self.prepare_run, self.create_branches, self.comment_on_issue, self.merge_branches,
             self.open_pull_request, self.get_diff, self.post_review, self.merge_pull_request,
             self.revert_merge, self.cleanup_runs, self.fetch_comments, self.close_pull_request,
+            self.get_pull_request, self.set_commit_status, self.update_pull_request,
+            self.open_issue_for_copy, self.dispatch_bump, self.open_sample_pr,
         ]
 
     @activity.defn
     async def prepare_run(self, input: PrepareRunInput) -> RunRepo:
-        """Open the issue and create the run's base branch from the baseline tag."""
+        """Take on the issue someone opened, and create the run's base branch from the
+        baseline tag. The run's PRs merge there, so main stays untouched for everyone."""
         await _maybe_inject_rate_limit()
-        repo = config.GITHUB_SANDBOX_REPO
-        baseline = await self._get(f"/repos/{repo}/git/ref/tags/{config.BASELINE_REF}")
+        baseline = await self._get(f"/repos/{input.repo}/git/ref/tags/{config.BASELINE_REF}")
         base_sha = baseline["object"]["sha"]
         base_branch = f"{input.branch_prefix}/main"
-        await self._ensure_branch(repo, base_branch, base_sha)
-
-        marker = _marker(input.run_id)
-        issue = await self._find_issue(repo, marker)
-        if issue is None:
-            issue = await self._post(
-                f"/repos/{repo}/issues",
-                {"title": input.title, "body": f"{input.body}\n\n{marker}", "labels": ["agentic-sdlc"]},
-            )
-        return RunRepo(repo=repo, issue_number=issue["number"], issue_url=issue["html_url"],
+        await self._ensure_branch(input.repo, base_branch, base_sha)
+        issue = await self._get(f"/repos/{input.repo}/issues/{input.issue_number}")
+        return RunRepo(repo=input.repo, issue_number=issue["number"], issue_url=issue["html_url"],
                        base_branch=base_branch, base_sha=base_sha)
 
     @activity.defn
@@ -233,15 +281,26 @@ class GitHubActivities:
 
     @activity.defn
     async def post_review(self, input: ReviewInput) -> None:
-        """Post the agent's review as a pull request review comment. The demo's token belongs to
-        the PR author, so it comments rather than approving; the merge gate is the approval."""
-        verdict = "✅ Approve" if input.review.verdict == "approve" else "🔁 Changes requested"
-        lines = [f"**{input.reviewer}**: {verdict}", "", input.review.summary]
-        lines += [f"- `{c.file}`: {c.comment}" for c in input.review.comments]
-        body = _bot("\n".join(lines))
-        reviews = await self._get(f"/repos/{input.repo}/pulls/{input.pr_number}/reviews")
-        if not any(r.get("body") == body for r in reviews):
-            await self._post(f"/repos/{input.repo}/pulls/{input.pr_number}/reviews", {"body": body, "event": "COMMENT"})
+        """Post the agent's review on the PR, with comments on the lines they're about. The
+        demo's token can belong to the PR's author, so it comments rather than approving; the
+        required commit status is the gate. If GitHub rejects a line (it isn't in the diff),
+        the comments go in the review body instead."""
+        verdict = "✅ Looks good" if input.review.verdict == "approve" else "🔁 Changes requested"
+        summary = [f"**{input.reviewer}**: {verdict}", "", input.review.summary]
+        inline = [c for c in input.review.comments if c.line]
+        listed = [c for c in input.review.comments if not c.line]
+        path = f"/repos/{input.repo}/pulls/{input.pr_number}/reviews"
+        if any(BOT_MARKER in (r.get("body") or "") and r.get("body", "").startswith(summary[0])
+               and input.review.summary in r.get("body", "") for r in await self._get(path)):
+            return  # an earlier attempt posted it
+        body = _bot("\n".join(summary + [f"- `{c.file}`: {c.comment}" for c in listed]))
+        payload = {"body": body, "event": "COMMENT",
+                   "comments": [{"path": c.file, "line": c.line, "side": "RIGHT", "body": c.comment} for c in inline]}
+        response = await self._request("POST", path, payload, allow={200, 422})
+        if response.status_code == 422:
+            everything = summary + [f"- `{c.file}`" + (f" line {c.line}" if c.line else "") + f": {c.comment}"
+                                    for c in input.review.comments]
+            await self._post(path, {"body": _bot("\n".join(everything)), "event": "COMMENT"})
 
     @activity.defn
     async def merge_pull_request(self, input: MergePrInput) -> str:
@@ -300,19 +359,78 @@ class GitHubActivities:
         await self._request("PATCH", f"/repos/{input.repo}/pulls/{input.pr_number}", {"state": "closed"})
 
     @activity.defn
+    async def get_pull_request(self, input: PullRequestRef) -> PullRequestInfo:
+        pr = await self._get(f"/repos/{input.repo}/pulls/{input.number}")
+        return PullRequestInfo(
+            number=pr["number"], url=pr["html_url"], title=pr["title"], body=pr.get("body") or "",
+            author=(pr.get("user") or {}).get("login", ""), head_branch=pr["head"]["ref"], head_sha=pr["head"]["sha"],
+            base_branch=pr["base"]["ref"], from_fork=(pr["head"].get("repo") or {}).get("full_name") != input.repo,
+        )
+
+    @activity.defn
+    async def set_commit_status(self, input: StatusInput) -> None:
+        """Set the agent's check on the branch's head commit. A pending or failing check blocks
+        merging when the target branch's ruleset requires it."""
+        head = await self._get(f"/repos/{input.repo}/git/ref/heads/{input.branch}")
+        payload = {"state": input.state, "context": STATUS_CONTEXT, "description": input.description[:140]}
+        if input.target_url:
+            payload["target_url"] = input.target_url
+        await self._post(f"/repos/{input.repo}/statuses/{head['object']['sha']}", payload)
+
+    @activity.defn
+    async def update_pull_request(self, input: UpdatePrInput) -> None:
+        await self._request("PATCH", f"/repos/{input.repo}/pulls/{input.number}", {"body": _bot(input.body)})
+
+    @activity.defn
+    async def open_issue_for_copy(self, input: ScenarioInput) -> ScenarioStarted:
+        """Open an issue labeled for the agents and for this copy of the demo; the webhook for
+        it starts the run, exactly as if a person had opened it on GitHub."""
+        await self._ensure_label(input.repo, input.owner_label)
+        issue = await self._post(f"/repos/{input.repo}/issues", {
+            "title": input.title, "body": input.body, "labels": ["agent", input.owner_label]})
+        return ScenarioStarted(url=issue["html_url"], kind="issue")
+
+    @activity.defn
+    async def dispatch_bump(self, input: ScenarioInput) -> ScenarioStarted:
+        """Run the repo's Dependency bump Action, which opens a Dependabot-style PR labeled for
+        this copy. That PR's webhook starts the repair."""
+        await self._ensure_label(input.repo, input.owner_label)
+        await self._request("POST", f"/repos/{input.repo}/actions/workflows/{BUMP_WORKFLOW}/dispatches",
+                            {"ref": "main", "inputs": {"owner": input.owner_label}}, allow={204})
+        return ScenarioStarted(url=f"https://github.com/{input.repo}/actions/workflows/{BUMP_WORKFLOW}", kind="dependency")
+
+    @activity.defn
+    async def open_sample_pr(self, input: ScenarioInput) -> ScenarioStarted:
+        """Open a pull request from a prepared branch with a subtle bug, as a person would, for
+        the agent to review. Each run gets its own branch so several people can do it at once."""
+        await self._ensure_label(input.repo, input.owner_label)
+        sample = await self._get(f"/repos/{input.repo}/git/ref/heads/{SAMPLE_PR_BRANCH}")
+        branch = f"review-sample/{activity.info().activity_id.rsplit('-', 1)[-1]}"
+        await self._ensure_branch(input.repo, branch, sample["object"]["sha"])
+        pr = await self._post(f"/repos/{input.repo}/pulls", {
+            "title": "Add a bulk discount for 3 or more items", "head": branch, "base": "main",
+            "body": "Customers buying 3 or more items get 10% off the subtotal. Shown as its own line in the totals."})
+        await self._post(f"/repos/{input.repo}/issues/{pr['number']}/labels", {"labels": [input.owner_label]})
+        return ScenarioStarted(url=pr["html_url"], kind="review")
+
+    @activity.defn
     async def cleanup_runs(self, input: CleanupInput) -> int:
-        """Reset: close this session's issues and pull requests and delete its branches."""
-        refs = await self._get(f"/repos/{input.repo}/git/matching-refs/heads/{input.branch_prefix}")
-        for pr in await self._get(f"/repos/{input.repo}/pulls?state=open&per_page=100"):
-            if pr["head"]["ref"].startswith(input.branch_prefix):
-                await self._request("PATCH", f"/repos/{input.repo}/pulls/{pr['number']}", {"state": "closed"})
-        for issue in await self._get(f"/repos/{input.repo}/issues?state=open&labels=agentic-sdlc&per_page=100"):
-            if input.marker in (issue.get("body") or ""):
-                await self._request("PATCH", f"/repos/{input.repo}/issues/{issue['number']}", {"state": "closed"})
-        for ref in refs:
+        """Reset: close this copy's open issues and pull requests, and delete the branches its
+        runs created. Other copies' work is left alone."""
+        closed = 0
+        for item in await self._get(f"/repos/{input.repo}/issues?state=open&labels={input.owner_label}&per_page=100"):
+            await self._request("PATCH", f"/repos/{input.repo}/issues/{item['number']}", {"state": "closed"})
+            closed += 1
+            if "pull_request" in item:
+                pr = await self._get(f"/repos/{input.repo}/pulls/{item['number']}")
+                head = pr["head"]["ref"]
+                if head.startswith(("dependency-bump/", "review-sample/")):
+                    await self._request("DELETE", f"/repos/{input.repo}/git/refs/heads/{head}", allow={204, 422})
+            activity.heartbeat()
+        for ref in await self._get(f"/repos/{input.repo}/git/matching-refs/heads/{input.branch_prefix}"):
             await self._request("DELETE", f"/repos/{input.repo}/git/{ref['ref']}", allow={204, 422})
             activity.heartbeat()
-        return len(refs)
+        return closed
 
     # -- HTTP helpers ------------------------------------------------------------------------
 
@@ -323,9 +441,10 @@ class GitHubActivities:
         if response.status_code == 422 and reset:
             await self._request("PATCH", f"/repos/{repo}/git/refs/heads/{branch}", {"sha": sha, "force": True})
 
-    async def _find_issue(self, repo: str, marker: str) -> dict | None:
-        issues = await self._get(f"/repos/{repo}/issues?state=all&labels=agentic-sdlc&per_page=30&sort=created")
-        return next((i for i in issues if marker in (i.get("body") or "")), None)
+    async def _ensure_label(self, repo: str, name: str) -> None:
+        await self._request("POST", f"/repos/{repo}/labels",
+                            {"name": name, "color": "5319e7", "description": "Owned by this copy of the agentic SDLC demo"},
+                            allow={201, 422})
 
     async def _get(self, path: str):
         return (await self._request("GET", path)).json()
@@ -370,10 +489,6 @@ def _human(raw: dict, number: int, kind: str, *, file: str | None = None) -> Hum
         body = f"(on {file}) {body}"
     return HumanComment(id=f"{kind}:{raw['id']}", number=number, author=(raw.get("user") or {}).get("login", "someone"),
                         body=body[:4000], url=raw.get("html_url", ""), created_at=raw.get("created_at", ""))
-
-
-def _marker(run_id: str) -> str:
-    return f"<!-- agentic-sdlc-run:{run_id} -->"
 
 
 async def _maybe_inject_rate_limit() -> None:

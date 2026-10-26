@@ -42,6 +42,7 @@
 .gh-chip.revert { border-color: var(--yellow); background: rgba(254, 203, 47, .1); }
 .gh-chip.quiet { border-color: var(--slate-500); background: none; color: var(--indigo-100); }
 .gh-chip.pending { border-color: var(--slate-500); background: none; color: var(--slate-300); }
+.gh-chip[data-status] { display: inline-flex; align-items: center; gap: .35rem; border-color: var(--status); }
 .run-meters { display: flex; align-items: center; gap: 1.4rem; }
 .meter { display: grid; gap: .15rem; min-width: 9rem; }
 .meter-value { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
@@ -83,7 +84,6 @@
 /* Gate */
 .gate { display: flex; flex-direction: column; gap: .7rem; min-height: 0; flex: 1; }
 .gate-details { min-height: 0; overflow: auto; display: grid; gap: .6rem; align-content: start; padding-right: .3rem; }
-.gate-feedback { flex: 1; min-width: 10rem; font: inherit; font-size: .85rem; color: var(--off-white); background: var(--space-black); border: 1px solid var(--slate-500); padding: .45rem .55rem; }
 .gate .eyebrow { color: var(--yellow); }
 .gate-question { margin: 0; font-weight: 400; font-size: 1.6rem; line-height: 1.2; }
 .gate-context { margin: 0; color: var(--indigo-100); font-size: .95rem; white-space: pre-wrap; }
@@ -110,10 +110,8 @@
 .tool-log { list-style: none; margin: 0; padding: 0; display: grid; gap: .2rem; font-size: .74rem; }
 .tool-log li { display: flex; align-items: center; gap: .4rem; min-width: 0; }
 .tool-log li .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .7rem; }
-.tool-log code, .approval code { font-family: var(--font-mono); color: var(--indigo-100); }
+.tool-log code { font-family: var(--font-mono); color: var(--indigo-100); }
 .reply-tail { margin: 0; font-size: .74rem; color: var(--slate-300); font-style: italic; max-height: 3.2em; overflow: hidden; }
-.approval { border: 1px solid var(--yellow); background: rgba(254, 203, 47, .08); padding: .45rem .55rem; display: grid; gap: .4rem; font-size: .8rem; }
-.approval div { display: flex; gap: .4rem; }
 
 /* Side panels */
 .side-card .segmented { align-self: start; }
@@ -193,8 +191,6 @@
 
 /* -- Conversation with the agents ---------------------------------------------------------- */
 .questions { margin: 0; padding-left: 1.3rem; display: grid; gap: .35rem; font-size: 1.05rem; }
-.gate-text { font: inherit; font-size: .9rem; color: var(--off-white); background: var(--space-black); border: 1px solid var(--slate-500); padding: .5rem .6rem; resize: vertical; }
-.gate-text:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--green-soft); }
 .review-window { display: grid; gap: .35rem; font-size: .92rem; }
 .review-window strong { color: var(--yellow); }
 .conversation { list-style: none; margin: 0; padding: 0; display: grid; gap: .7rem; overflow: auto; align-content: start; }
@@ -203,9 +199,12 @@
 .conversation blockquote { margin: 0; font-size: .9rem; white-space: pre-wrap; }
 .conversation p { margin: 0; font-size: .78rem; }
 .conversation .outcome { color: var(--green); }
-.source { font-family: var(--font-mono); font-size: .66rem; padding: .1rem .4rem; border: 1px solid var(--slate-500); color: var(--indigo-100); }
-.source.github { border-color: var(--uv-light); }
-.steer { display: flex; gap: .4rem; }
-.steer input { flex: 1; min-width: 0; font: inherit; font-size: .8rem; color: var(--off-white); background: var(--space-black); border: 1px solid var(--slate-500); padding: .3rem .45rem; }
-.steer input:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--green-soft); }
 .queued-steer { margin: 0; font-size: .72rem; color: var(--yellow); }
+
+/* What a gate waits for on GitHub, and the coding agent's diagnosis of a broken upgrade. */
+.gate-reply { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; font-size: .9rem; }
+.gate-reply code { font-family: var(--font-mono); color: var(--green); }
+.diagnosis { border: 1px solid var(--uv-light); background: rgba(68, 76, 231, .08); padding: .7rem .8rem; margin-bottom: .8rem; }
+.diagnosis dl { margin: .4rem 0 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; font-size: .85rem; }
+.diagnosis dt { color: var(--slate-300); font-family: var(--font-mono); font-size: .75rem; }
+.diagnosis dd { margin: 0; }
