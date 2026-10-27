@@ -15,6 +15,7 @@ const STEPS: Record<RunKind, Record<string, [call: string, method: string]>> = {
     pr: ["_open_pull_request", "_open_pull_request"], review: ["_review(", "_review"], security: ["_review(", "_review"],
     "gate:merge": ["_review_window", "_review_window"], feedback: ["_review_window", "_address_feedback"], merge: ["_merge", "_merge"],
     staging: ["_deploy_to_staging", "_deploy_to_staging"], "gate:production": ["_ask_to_ship", "_ask_to_ship"],
+    adjust: ["_ask_to_ship", "_adjust_on_staging"],
     canary: ["_canary", "_canary"], rollback: ["_canary", "_roll_back"], done: ["_finish", "_finish"], "gate:budget": ["", "_ensure_budget"],
   },
   dependency: {

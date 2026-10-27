@@ -56,6 +56,11 @@ class BranchesInput(BaseModel):
     branches: list[str]
 
 
+class BranchRef(BaseModel):
+    repo: str
+    branch: str
+
+
 class CommentInput(BaseModel):
     repo: str
     issue_number: int
@@ -143,6 +148,9 @@ class RevertInput(BaseModel):
     revert_branch: str
     title: str
     body: str
+    # Restore this commit's tree instead of reverting the merge: it undoes the merge and any
+    # adjustments made on staging after it, in one commit.
+    restore_sha: str | None = None
 
 
 class CleanupInput(BaseModel):
@@ -216,7 +224,7 @@ class GitHubActivities:
             self.open_pull_request, self.get_diff, self.post_review, self.merge_pull_request,
             self.revert_merge, self.cleanup_runs, self.fetch_comments, self.close_pull_request,
             self.get_pull_request, self.set_commit_status, self.update_pull_request,
-            self.open_issue_for_copy, self.dispatch_bump, self.open_sample_pr,
+            self.open_issue_for_copy, self.dispatch_bump, self.open_sample_pr, self.branch_head,
         ]
 
     @activity.defn
@@ -236,6 +244,12 @@ class GitHubActivities:
     async def create_branches(self, input: BranchesInput) -> None:
         """Create one branch per coding agent, all from the run's base."""
         await asyncio.gather(*(self._ensure_branch(input.repo, b, input.from_sha) for b in input.branches))
+
+    @activity.defn
+    async def branch_head(self, input: BranchRef) -> str:
+        """The commit a branch points at now, say after an agent pushed to it."""
+        ref = await self._get(f"/repos/{input.repo}/git/ref/heads/{input.branch}")
+        return ref["object"]["sha"]
 
     @activity.defn
     async def comment_on_issue(self, input: CommentInput) -> None:
@@ -338,11 +352,13 @@ class GitHubActivities:
             root = await git_tools.checkout(workspace)
             log = await git_tools._git(root, "log", "-1", "--format=%s")
             if not log.startswith("Revert"):
-                await git_tools._git(
-                    root, "-c", "user.name=Orbit release agent",
-                    "-c", "user.email=agentic-sdlc-agent@users.noreply.github.com",
-                    "revert", "--no-edit", "-m", "1", input.merge_sha,
-                )
+                author = ["-c", "user.name=Orbit release agent",
+                          "-c", "user.email=agentic-sdlc-agent@users.noreply.github.com"]
+                if input.restore_sha:
+                    await git_tools._git(root, "read-tree", "-u", "--reset", input.restore_sha)
+                    await git_tools._git(root, *author, "commit", "--quiet", "-m", input.title)
+                else:
+                    await git_tools._git(root, *author, "revert", "--no-edit", "-m", "1", input.merge_sha)
                 await git_tools._git(root, "push", "--quiet", "origin", f"HEAD:{input.revert_branch}")
         pr = await self.open_pull_request(PullRequestInput(
             repo=input.repo, head=input.revert_branch, base=input.base_branch, title=input.title, body=input.body,

@@ -12,7 +12,7 @@ type Kind = "agent" | "person" | "system";
 
 const KIND: Record<string, Kind> = {
   issue: "system", clarify: "agent", "gate:clarify": "person", plan: "agent", "gate:plan": "person", feedback: "agent", build: "system", pr: "system", review: "agent",
-  security: "agent", "gate:merge": "person", merge: "system", staging: "system", "gate:production": "person",
+  security: "agent", "gate:merge": "person", merge: "system", staging: "system", "gate:production": "person", adjust: "agent",
   canary: "system", rollback: "system", "gate:budget": "person", done: "system",
   tests: "system", diagnose: "agent", fix: "agent", explain: "system", "gate:conversation": "person",
 };
@@ -20,7 +20,7 @@ const KIND: Record<string, Kind> = {
 const SHORT: Record<string, string> = {
   issue: "Issue", clarify: "Questions", "gate:clarify": "Answer", plan: "Plan", "gate:plan": "/approve", feedback: "Fix", build: "Fork", pr: "Pull request",
   review: "Review", security: "Security", "gate:merge": "Comments", merge: "Merge", staging: "Staging",
-  "gate:production": "/ship", canary: "Canary", rollback: "Roll back", "gate:budget": "Budget", done: "Report",
+  "gate:production": "/ship", adjust: "Adjust", canary: "Canary", rollback: "Roll back", "gate:budget": "Budget", done: "Report",
   tests: "Tests", diagnose: "Diagnose", fix: "Fix", explain: "Explain", "gate:conversation": "Comments",
 };
 
@@ -96,7 +96,7 @@ export function PipelineGraph({ run, selected, onSelect, retrying }: {
 /** Steps that only appear when the run actually takes them. */
 export function hiddenUntilUsed(s: Step): boolean {
   const unused = s.status === "pending" || s.status === "skipped";
-  if (["gate:budget", "feedback", "rollback"].includes(s.key)) return unused;
+  if (["gate:budget", "feedback", "adjust", "rollback"].includes(s.key)) return unused;
   return s.key === "gate:clarify" && s.status === "skipped";
 }
 

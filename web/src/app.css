@@ -220,3 +220,24 @@
 .diagnosis dl { margin: .4rem 0 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; font-size: .85rem; }
 .diagnosis dt { color: var(--slate-300); font-family: var(--font-mono); font-size: .75rem; }
 .diagnosis dd { margin: 0; }
+
+/* -- Narrow windows ---------------------------------------------------------------------
+   The kit lets the page scroll below 900px but only restyles its own .app-shell, so this
+   app's fixed-height grids and nowrap rows pushed content off the left and right edges.
+   Stack everything in one column and let it wrap. */
+@media (max-width: 900px) {
+  .shell { height: auto; min-height: 100dvh; display: flex; flex-direction: column; padding: .8rem 1rem 1.5rem; }
+  .topbar { flex-wrap: wrap; gap: .6rem; }
+  .acts { max-width: 100%; overflow-x: auto; }
+  .topbar-actions { flex-wrap: wrap; }
+  .body { display: flex; flex-direction: column; }
+  .run-console { display: flex; flex-direction: column; }
+  .run-head { flex-direction: column; align-items: stretch; }
+  .run-title { flex-wrap: wrap; }
+  .run-title .heading { white-space: normal; }
+  .gh-chips { flex-wrap: wrap; }
+  .run-meters { flex-wrap: wrap; gap: 1rem; }
+  .run-grid { display: flex; flex-direction: column; }
+  .run-grid > .card { min-height: 20rem; }
+  .agent-grid, .stat-grid, .problem-grid, .change-grid, .act-result, .act-proof { grid-template-columns: minmax(0, 1fr); }
+}

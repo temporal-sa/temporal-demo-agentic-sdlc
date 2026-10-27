@@ -114,7 +114,7 @@ Keys: **1–6** switch acts, **N** starts a scenario.
 
 **Do:** comment on the PR: *"The button should say 'Move to cart', not just an icon."* A coding agent fixes it on the PR branch and the reviewer looks again. **Optional, a scope change:** comment *"Also show how many items are saved in the header"*. The planner calls it a scope change: the PR closes with an explanation, the plan is revised on the issue and needs `/approve` again.
 
-**Do:** let the window close. After staging, the issue says "🚦 Staging passed its checks. Try it: …/apps/gh/staging/. Reply `/ship` … or `/stop <reason>`." Open staging, then reply `/ship`.
+**Do:** let the window close. After staging, the issue says "🚦 Staging passed its checks. Try it: …/apps/gh/staging/. Reply `/ship` …, `/stop <reason>`, or comment with what to change …" Open staging, then reply `/ship`. (Optional: comment an adjustment first, like "make the discount banner bigger". A coding agent changes it on staging, staging redeploys, and the issue asks for `/ship` again. A new requirement gets a reply suggesting its own issue.)
 
 ### 6. Break the canary (D4)
 
@@ -196,7 +196,7 @@ await workflow.wait_condition(lambda: bool(self._inbox) or (pr in self._closed_p
 **What you need to understand:**
 
 - The web server verifies GitHub's signature, then routes: a new labeled issue or a PR starts a Workflow with a deterministic ID (`<queue>.gh.pr-13`), so a redelivered webhook can't start a second one; a comment becomes a `github_comment` Signal. The runs to Signal are found with a Visibility query on a search attribute each run keeps up to date. Visibility queries aren't billable.
-- A comment starting with a command the gate is waiting for (`/approve`, `/merge`, `/ship`, `/stop`, `/continue`) decides it. Anything else is conversation, which the planner triages: feedback for a coder, or a scope change that goes back to planning. While coders work and nobody's at a gate, a comment steers them.
+- A comment starting with a command the gate is waiting for (`/approve`, `/merge`, `/ship`, `/stop`, `/continue`) decides it. Anything else is conversation, which the planner triages: feedback for a coder, or a scope change that goes back to planning. At the production gate, feedback is made on staging and a scope change gets a reply suggesting a new issue. While coders work and nobody's at a gate, a comment steers them.
 - GitHub doesn't redeliver a failed webhook on its own, so each gate reads the comments once when it opens and de-duplicates by comment ID. There's no polling loop.
 - Everything the agents post carries a hidden marker, so they never read their own comments back as feedback.
 
@@ -334,7 +334,7 @@ deployment = WorkerDeploymentConfig(
 | The bump PR is open but no run appears | It was opened without this copy's owner label | Add the label (`agentic-sdlc:<copy>`) to the PR; the run starts then |
 | `dev.py` says webhook forwarding didn't start | Someone else is forwarding the repo, or your gh login lacks `admin:repo_hook` | Wait for them to stop, or `gh auth refresh -s admin:repo_hook` |
 | The agent comments "This demo already has 3 agent runs in progress" | The per-copy cap | Stop a run, or **Reset**, then reopen the issue or PR |
-| A comment doesn't change anything | The gate wants a command (`/ship` or `/stop` at production) | The **Conversation** tab says "Noted; the run is waiting for …" |
+| A comment doesn't change anything | The gate wants a command (`/continue` or `/stop` at the budget gate), or the comment started with a command the gate isn't waiting for | The **Conversation** tab says "Noted; the run is waiting for …" |
 | Top right says **no workers** and nothing moves | The worker was killed or crashed | Click **Start a worker**, or check `.logs/worker-v1.log` |
 | A step is pink with `GitHub 401` or `403` | The GitHub token expired or lacks a permission | [Rotate the GitHub token](#rotate-the-github-token) |
 | A step is pink with `ProviderRejected` | A model name or key is wrong for that provider | Pick another model in **Start a scenario**, or check the key |

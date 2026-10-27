@@ -26,6 +26,7 @@ from agentic_sdlc.activities.checks import TestRun
 from agentic_sdlc.activities.deploy import CheckInput, CheckResult, DeployCall
 from agentic_sdlc.activities.github import (
     BranchesInput,
+    BranchRef,
     ClosePrInput,
     CommentInput,
     CommentsInput,
@@ -84,6 +85,7 @@ class World:
         self.authors: list[tuple[str, str]] = []  # (agent label, body) of each comment
         self.checks: list[str] = []  # the agent's commit status, in order
         self.pr_body = ""
+        self.reverts: list[RevertInput] = []
 
     def activities(self):
         world = self
@@ -157,9 +159,15 @@ class World:
             return "merged123"
 
         @activity.defn(name="revert_merge")
-        async def revert_merge(_: RevertInput) -> PullRequest:
+        async def revert_merge(input: RevertInput) -> PullRequest:
             world.calls["revert"] += 1
+            world.reverts.append(input)
             return PullRequest(number=3, url="https://x/pull/3", head_sha="rev")
+
+        @activity.defn(name="branch_head")
+        async def branch_head(_: BranchRef) -> str:
+            world.calls["branch_head"] += 1
+            return f"adjusted{world.calls['branch_head']}"
 
         @activity.defn(name="run_agent_turn")
         async def run_agent_turn(turn: AgentTurn) -> AgentTurnResult:
@@ -209,7 +217,7 @@ class World:
 
         return [prepare_run, create_branches, comment_on_issue, merge_branches, open_pull_request, get_pull_request,
                 set_commit_status, update_pull_request, close_pull_request, fetch_comments, get_diff, post_review,
-                merge_pull_request, revert_merge, run_agent_turn, run_branch_tests, apply_deployment, check_environment]
+                merge_pull_request, revert_merge, branch_head, run_agent_turn, run_branch_tests, apply_deployment, check_environment]
 
 
 class _FakeAgentBase:
@@ -548,6 +556,62 @@ async def test_stop_at_production_keeps_production_untouched(env):
     assert world.deploys == ["staging"]
     assert step(state, "canary").status == "skipped"
     assert any("Not before the holiday freeze" in body for _, body in world.posts)
+
+
+async def test_a_comment_at_staging_is_adjusted_and_redeployed(env):
+    world = World()
+    gates: list[str] = []
+
+    def policy(gate, n):
+        if gate == "production" and n == 1:
+            return "The discount banner is too small"
+        return default_policy(gate, n)
+
+    state = await run_scenario(env.client, world, policy=gate_log(gates, policy))
+    assert state.status == "completed"
+    assert world.deploys == ["staging", "staging", "canary", "promote"]
+    assert payload(world, "coder-staging:code")["subtask"]["id"] == "staging-feedback"
+    assert gates == ["plan", "merge", "production", "production"]  # asked for /ship again
+    assert world.calls["open_pr"] == 1 and world.calls["merge"] == 1  # straight to staging, no new PR
+    assert state.staging_sha == state.canary_sha == "adjusted1"  # the canary ships the adjusted commit
+    item = next(c for c in state.conversation if c.kind == "feedback")
+    assert item.stage == "production" and item.status == "addressed"
+    assert step(state, "adjust").status == "completed"
+    assert any("Adjusted:" in body for n, body in world.posts if n == ISSUE)
+
+
+async def test_a_scope_change_at_staging_is_answered_not_built(env):
+    world = World()
+    gates: list[str] = []
+
+    def policy(gate, n):
+        if gate == "production" and n == 1:
+            return "Also add a FREESHIP code"
+        return default_policy(gate, n)
+
+    state = await run_scenario(env.client, world, policy=gate_log(gates, policy))
+    assert state.status == "completed"
+    assert "coder-staging:code" not in world.handlers
+    assert world.deploys == ["staging", "canary", "promote"]
+    assert gates == ["plan", "merge", "production", "production"]
+    assert any("Open an issue for it" in body for n, body in world.posts if n == ISSUE)
+    assert next(c for c in state.conversation if c.kind == "scope_change").status == "addressed"
+    assert step(state, "adjust").status == "skipped"
+
+
+async def test_rollback_after_a_staging_adjustment_restores_the_run_base(env):
+    world = World(canary_healthy=False)
+
+    def policy(gate, n):
+        if gate == "production" and n == 1:
+            return "Make the error message friendlier"
+        return default_policy(gate, n)
+
+    state = await run_scenario(env.client, world, policy=policy)
+    assert state.status == "rolled_back"
+    assert world.deploys == ["staging", "staging", "canary", "rollback"]
+    (revert,) = world.reverts
+    assert revert.merge_sha == "adjusted1" and revert.restore_sha == "abc"  # undoes the merge and the adjustment
 
 
 async def test_a_comment_on_the_issue_while_coders_work_steers_all_of_them(env):

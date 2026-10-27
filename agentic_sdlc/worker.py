@@ -11,7 +11,9 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import time
+from datetime import timedelta
 
 from pydantic_ai.durable_exec.temporal import AgentPlugin
 from redis.asyncio import Redis
@@ -55,7 +57,14 @@ async def main() -> None:
         plugins=[AgentPlugin(agent) for agent in ALL_AGENTS],
         deployment_config=deployment,
         workflow_runner=workflow_runner(),
+        # In-flight model calls finish; the pod's 600 second termination grace period is the hard stop.
+        graceful_shutdown_timeout=timedelta(seconds=540),
     )
+    # The catalog starts this as the container's PID 1 (no init), and PID 1 ignores SIGTERM unless
+    # a handler is installed; without this the pod sits out its whole grace period and is killed.
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(worker.shutdown()))
     heartbeat = asyncio.create_task(_announce_liveness())
     log.info(
         "worker ready: task_queue=%s pipeline=%s build_id=%s",

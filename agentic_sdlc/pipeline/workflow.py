@@ -7,8 +7,9 @@ lifecycle.
 
 People drive it entirely from GitHub. The planner asks its questions on the issue and people
 reply there; ``/approve`` approves the plan; a comment while coders work steers them; comments on
-the PR are feedback (fixed on the spot) or a scope change (the run goes back to planning); and
-``/ship`` or ``/stop`` decides the release. The console only shows what's happening.
+the PR are feedback (fixed on the spot) or a scope change (the run goes back to planning); a
+comment once the change is on staging gets it adjusted there; and ``/ship`` or ``/stop`` decides
+the release. The console only shows what's happening.
 
 Every agent is a child Workflow (agents/workflows.py) whose model calls and tool calls are
 Activities, so a crashed worker, a rate-limited provider or a two-hour wait for a person loses
@@ -31,6 +32,7 @@ with workflow.unsafe.imports_passed_through():
         CODER,
         PLANNER,
         BranchesInput,
+        BranchRef,
         ClosePrInput,
         GitHubActivities,
         MergeInput,
@@ -70,6 +72,7 @@ SECURITY_REVIEW = config.PIPELINE_VERSION == "v2"
 MAX_PLAN_ROUNDS = 3
 MAX_PLAN_REVISIONS = 3  # scope changes that send the run back to planning
 MAX_REVIEW_ROUNDS = 5  # rounds of PR feedback before the run gives up
+MAX_STAGING_ROUNDS = 5  # adjustments made on staging before the agents ask for a new issue
 CANARY_WEIGHT = 20
 
 
@@ -78,6 +81,7 @@ class IssueToProduction(AgentRun):
     @workflow.init
     def __init__(self, request: RunRequest) -> None:
         self._begin(request, _initial_steps())
+        self._staging_rounds = 0
 
     @workflow.run
     async def run(self, request: RunRequest) -> RunState:
@@ -98,11 +102,11 @@ class IssueToProduction(AgentRun):
                 await self._start_over(repo, pr, scope_change)
             merge_sha = await self._merge(repo, pr)
             await self._deploy_to_staging(merge_sha)
-            release = await self._ask_to_ship(repo)
+            release = await self._ask_to_ship(repo, plan)
             if release.name == "/stop":
                 await self._stop(repo, release.argument)
                 return self._state
-            shipped = await self._canary(repo, merge_sha)
+            shipped = await self._canary(repo, self._state.staging_sha or merge_sha)
             await self._finish(repo, shipped)
         except ApplicationError as err:
             self._state.status = "failed"
@@ -387,16 +391,70 @@ class IssueToProduction(AgentRun):
                 raise ApplicationError(f"Staging checks failed: {check.detail}", non_retryable=True)
             self._detail("staging", check.detail)
 
-    async def _ask_to_ship(self, repo: RunRepo) -> Command:
+    async def _ask_to_ship(self, repo: RunRepo, plan: Plan) -> Command:
+        """People try staging and decide on the issue. A comment that adjusts what they saw goes
+        to a coding agent, staging redeploys, and they're asked again; a new requirement gets a
+        reply suggesting its own issue."""
         staging = f" Try it: {self._request.console_url}/apps/gh/staging/" if self._request.console_url else ""
-        await self._post(repo.issue_number, f"🚦 Staging passed its checks.{staging}\n\nReply `/ship` to send it to "
-                                            f"production through a {CANARY_WEIGHT}% canary, or `/stop <reason>` to stop here.")
-        outcome = await self._wait_for_people(
-            "production", "Waiting for /ship or /stop on the issue",
-            f"Staging passed its checks. The canary starts at {CANARY_WEIGHT}% of traffic.",
-            commands=["/ship", "/stop"], conversational=False, issue=repo.issue_number, github_url=repo.issue_url)
-        assert outcome.command is not None  # this wait has no timeout and no PR to close
-        return outcome.command
+        announce = True
+        while True:
+            if announce:
+                await self._post(repo.issue_number, f"🚦 Staging passed its checks.{staging}\n\nReply `/ship` to send it "
+                                                    f"to production through a {CANARY_WEIGHT}% canary, `/stop <reason>` to "
+                                                    "stop here, or comment with what to change and an agent will adjust it "
+                                                    "on staging.")
+            outcome = await self._wait_for_people(
+                "production", "Waiting for /ship, /stop or a comment on the issue",
+                f"Staging passed its checks. The canary starts at {CANARY_WEIGHT}% of traffic.",
+                commands=["/ship", "/stop"], issue=repo.issue_number, github_url=repo.issue_url)
+            if outcome.command:
+                for item in outcome.comments:
+                    self._resolve(item, "addressed", f"Noted; {outcome.command.name} came with it")
+                return outcome.command
+            planner = await self._planner(Workspace(repo=repo.repo, branch=repo.base_branch))
+            for item in outcome.comments:
+                await self._triage(planner, plan, item)
+            for item in outcome.comments:
+                if item.kind == "scope_change":
+                    await self._post(repo.issue_number, f"> **@{item.author}**: {item.text[:300]}\n\n"
+                                                        f"That's a new requirement ({item.reason}), not an adjustment to "
+                                                        "this change. Open an issue for it and label it `agent` if you'd "
+                                                        "like the agents to take it on.", agent=PLANNER)
+                    self._resolve(item, "addressed", "A new requirement; suggested its own issue")
+            adjustments = [c for c in outcome.comments if c.kind == "feedback"]
+            announce = bool(adjustments) and await self._adjust_on_staging(repo, plan, adjustments)
+
+    async def _adjust_on_staging(self, repo: RunRepo, plan: Plan, comments: list[Feedback]) -> bool:
+        """A coding agent changes what's on staging (the run's base branch), the tests run, and
+        staging redeploys. Returns whether it did, so the run asks for /ship again."""
+        quoted = "\n".join(f"> **@{c.author}**: {c.text[:300]}" for c in comments)
+        if self._staging_rounds >= MAX_STAGING_ROUNDS:
+            await self._post(repo.issue_number, f"{quoted}\n\nThat's {MAX_STAGING_ROUNDS} adjustments on staging already. "
+                                                "Reply `/ship` or `/stop`, or open a new issue for more changes.")
+            for item in comments:
+                self._resolve(item, "addressed", "Too many adjustments; asked for /ship, /stop or a new issue")
+            return False
+        self._staging_rounds += 1
+        async with self._step("adjust"):
+            for item in comments:
+                item.status = "working"
+            who = ", ".join(sorted({f"@{c.author}" for c in comments}))
+            self._detail("adjust", f"Adjusting staging for {_count(len(comments), 'comment')} from {who}")
+            workspace = Workspace(repo=repo.repo, branch=repo.base_branch)
+            coder = await self._start_agent(self._role("coder-staging"), self._request.models.coder, workspace)
+            reply = await self._code_until_green(coder, workspace, plan.summary, Subtask(
+                id="staging-feedback", title="Adjust what people saw on staging",
+                description="\n".join(f"- @{c.author}: {c.text}" for c in comments)), lane="adjust")
+            sha = await workflow.execute_activity_method(GitHubActivities.branch_head, BranchRef(
+                repo=repo.repo, branch=repo.base_branch), **GITHUB)
+            await self._post(repo.issue_number, f"{quoted}\n\n🛠️ Adjusted: {reply.summary}\n\nRedeploying staging.",
+                             agent=CODER)
+            for item in comments:
+                self._resolve(item, "addressed", reply.summary)
+            self._detail("adjust", reply.summary)
+            self._prove("D7", f"{who}'s comment on staging was made by a coding agent and redeployed, without starting over")
+        await self._deploy_to_staging(sha)
+        return True
 
     async def _canary(self, repo: RunRepo, sha: str) -> bool:
         """Send a slice of production traffic to the new commit, watch it, then promote it or
@@ -425,7 +483,7 @@ class IssueToProduction(AgentRun):
             await self._deploy(DeployRequest(action="rollback", sha=sha, run_id=self._request.run_id))
             self._detail("rollback", "Canary traffic back to the stable version")
             revert = await workflow.execute_activity_method(GitHubActivities.revert_merge, RevertInput(
-                repo=repo.repo, base_branch=repo.base_branch, merge_sha=sha,
+                repo=repo.repo, base_branch=repo.base_branch, merge_sha=sha, restore_sha=repo.base_sha,
                 revert_branch=f"{self._branches}/revert", title=f"Revert: {self._request.title}",
                 body=f"The canary failed its checks ({check.detail}), so this change is reverted.",
             ), **GITHUB)
@@ -511,6 +569,7 @@ def _initial_steps() -> list[Step]:
         Step(key="merge", label="Merge"),
         Step(key="staging", label="Deploy to staging and check it"),
         Step(key="gate:production", label="Someone replies /ship"),
+        Step(key="adjust", label="Coding agent adjusts what people saw on staging"),
         Step(key="canary", label=f"Canary at {CANARY_WEIGHT}%, then promote"),
         Step(key="rollback", label="Roll back if the canary fails"),
         Step(key="gate:budget", label="Budget guard"),

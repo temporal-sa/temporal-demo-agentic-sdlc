@@ -163,12 +163,18 @@ async def overview():
     return {"runs": runs, "environments": env.model_dump(), "workers": workers, "apps": "/apps/gh"}
 
 
+RESET_KEY = "reset_at:{}"
+
+
 async def _list_runs() -> list[dict]:
+    # Reset can't delete finished runs from Visibility, so it records when it happened and
+    # everything that started before is hidden: the scorecard starts from nothing again.
+    reset_at = float(await state.redis.get(RESET_KEY.format(config.TASK_QUEUE)) or 0)
     query = f"WorkflowType IN {RUN_TYPES} AND WorkflowId STARTS_WITH '{RUNS_PREFIX}'"
     runs = []
     async for execution in state.temporal.list_workflows(query, limit=20):
         memo = await execution.memo_value("run", default=None)
-        if memo:
+        if memo and (memo.get("started_at") or 0) >= reset_at:
             closed = execution.status != WorkflowExecutionStatus.RUNNING
             summary = _run_summary(memo)
             if closed and summary["status"] in ("running", "waiting"):
@@ -488,6 +494,7 @@ async def reset():
         start_to_close_timeout=timedelta(minutes=5),
         heartbeat_timeout=timedelta(seconds=60),
     )
+    await state.redis.set(RESET_KEY.format(config.TASK_QUEUE), time.time())
     state.view_cache.clear()
     state.env_cache.clear()
     return {"ok": True, "stopped": sum(1 for r in runs if not r["closed"])}
