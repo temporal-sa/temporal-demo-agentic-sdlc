@@ -224,6 +224,15 @@ def test_a_long_bot_comment_is_ignored_too():
     assert webhooks.route("issue_comment", comment_event(body=long_plan)) == []
 
 
+def test_the_marker_leads_every_bot_comment():
+    from agentic_sdlc.activities.github import _bot
+
+    long_plan = _bot("### Plan\n" + "- criterion\n" * 500)
+    assert long_plan[:4000].startswith(BOT_MARKER)
+    assert _bot(long_plan) == long_plan  # marking twice changes nothing
+    assert webhooks.route("issue_comment", comment_event(body=long_plan)) == []
+
+
 def test_the_catch_up_read_skips_long_bot_comments():
     from agentic_sdlc.activities.github import _human
 

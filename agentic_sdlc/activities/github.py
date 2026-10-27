@@ -294,7 +294,7 @@ class GitHubActivities:
         inline = [c for c in input.review.comments if c.line]
         listed = [c for c in input.review.comments if not c.line]
         path = f"/repos/{input.repo}/pulls/{input.pr_number}/reviews"
-        if any(BOT_MARKER in (r.get("body") or "") and r.get("body", "").startswith(summary[0])
+        if any(BOT_MARKER in (r.get("body") or "") and summary[0] in r.get("body", "")
                and input.review.summary in r.get("body", "") for r in await self._get(path)):
             return  # an earlier attempt posted it
         body = _bot("\n".join(summary + [f"- `{c.file}`: {c.comment}" for c in listed]))
@@ -510,7 +510,10 @@ class GitHubActivities:
 
 
 def _bot(body: str) -> str:
-    return body if BOT_MARKER in body else f"{body}\n\n{BOT_MARKER}"
+    """Mark text the agents post. They post with the demo's PAT, so on GitHub their comments look
+    like the token owner's; the marker is how the webhook and the catch-up read tell them apart.
+    It goes first (GitHub doesn't render it), so nothing that shortens a comment can drop it."""
+    return body if BOT_MARKER in body else f"{BOT_MARKER}\n{body}"
 
 
 def _human(raw: dict, number: int, kind: str, *, file: str | None = None) -> HumanComment | None:
