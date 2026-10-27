@@ -81,6 +81,7 @@ class World:
         self.payloads: list[tuple[str, dict]] = []
         self.on_github: list[HumanComment] = []  # comments whose webhook never arrived; only a catch-up finds them
         self.posts: list[tuple[int, str]] = []  # (issue or PR number, body) the run commented
+        self.authors: list[tuple[str, str]] = []  # (agent label, body) of each comment
         self.checks: list[str] = []  # the agent's commit status, in order
         self.pr_body = ""
 
@@ -100,6 +101,7 @@ class World:
         @activity.defn(name="comment_on_issue")
         async def comment_on_issue(input: CommentInput) -> None:
             world.posts.append((input.issue_number, input.body))
+            world.authors.append((input.agent, input.body))
             if input.reopen:
                 world.calls["reopen"] += 1
 
@@ -356,6 +358,9 @@ async def test_happy_path_ships_through_approve_and_ship_on_github(env):
     assert world.checks == ["pending", "success"]  # the agent's required check on the PR
     assert any("Reply `/approve`" in body for n, body in world.posts if n == ISSUE)
     assert [c.kind for c in state.conversation] == ["command", "command"]
+    # Every comment says who wrote it: the planner its plan, the pipeline its gates.
+    assert next(agent for agent, body in world.authors if "### 🗺️ Plan" in body) == "Planner agent"
+    assert next(agent for agent, body in world.authors if "Staging passed" in body) == "Pipeline"
     assert {p.criterion for p in state.proofs} >= {"D2", "D3", "D6"}
 
 
@@ -505,7 +510,7 @@ async def test_pr_feedback_is_addressed_and_re_reviewed(env):
     assert "planner:triage" in world.handlers
     assert payload(world, "coder-integration:code")["subtask"]["id"] == "pr-feedback"
     assert world.handlers.count("reviewer-quality:review") == 2  # reviewed again after the fix
-    assert any("Addressed by the coding agent" in body for n, body in world.posts if n == 2)
+    assert any("Addressed:" in body for n, body in world.posts if n == 2)
     item = next(c for c in state.conversation if c.kind == "feedback")
     assert item.status == "addressed"
     assert world.checks == ["pending", "success", "pending", "success"]
@@ -587,6 +592,7 @@ async def test_a_breaking_bump_is_diagnosed_fixed_explained_and_reviewed(env):
                     "## How to verify", "Original description"):
         assert section in world.pr_body
     assert any("Why orbit-money 2.0.0 breaks the build" in body for n, body in world.posts if n == BUMP_PR)
+    assert next(agent for agent, body in world.authors if "breaks the build" in body) == "Coding agent"
     assert world.checks == ["pending", "success"]
     assert state.diagnosis is not None
     assert gates == ["conversation"]  # then it listens to the PR until it closes
@@ -618,7 +624,7 @@ async def test_a_pr_review_fails_the_check_then_fixes_on_request(env):
     assert state.status == "completed"
     assert world.handlers == ["reviewer-quality:review", "planner:triage", "coder:code", "reviewer-quality:review"]
     assert world.checks == ["pending", "failure", "pending", "success"]
-    assert any("Addressed by the coding agent" in body for n, body in world.posts if n == PERSON_PR)
+    assert any("Addressed:" in body for n, body in world.posts if n == PERSON_PR)
 
 
 async def test_an_out_of_scope_request_on_a_pr_is_answered_not_built(env):

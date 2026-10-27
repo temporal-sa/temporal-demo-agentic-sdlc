@@ -29,6 +29,11 @@ API = "https://api.github.com"
 # Everything the pipeline writes on GitHub carries this marker, so reading comments back can
 # tell people from the bot even though both post with the same token's account.
 BOT_MARKER = "<!-- agentic-sdlc-bot -->"
+# Who a comment is from, shown at its top. The agents post with the demo's PAT, so on GitHub every
+# comment's author is the token owner; this label says which agent, or the pipeline, wrote it.
+PIPELINE = "Pipeline"
+PLANNER = "Planner agent"
+CODER = "Coding agent"
 
 
 class RunRepo(BaseModel):
@@ -55,6 +60,7 @@ class CommentInput(BaseModel):
     repo: str
     issue_number: int
     body: str
+    agent: str = PIPELINE
     labels: list[str] = []
     reopen: bool = False
     close: bool = False
@@ -78,6 +84,7 @@ class PullRequestInput(BaseModel):
     base: str
     title: str
     body: str
+    agent: str = PIPELINE
 
 
 class PullRequest(BaseModel):
@@ -120,6 +127,7 @@ class ClosePrInput(BaseModel):
     repo: str
     pr_number: int
     comment: str
+    agent: str = PIPELINE
 
 
 class MergePrInput(BaseModel):
@@ -172,6 +180,7 @@ class UpdatePrInput(BaseModel):
     repo: str
     number: int
     body: str
+    agent: str = PIPELINE
 
 
 class ScenarioInput(BaseModel):
@@ -232,7 +241,7 @@ class GitHubActivities:
     async def comment_on_issue(self, input: CommentInput) -> None:
         await _maybe_inject_rate_limit()
         path = f"/repos/{input.repo}/issues/{input.issue_number}"
-        body = _bot(input.body)
+        body = _bot(input.body, input.agent)
         # A retry after a successful post would comment twice; skip if this exact body is already there.
         comments = await self._get(f"{path}/comments?per_page=100&sort=created&direction=desc")
         if not any(c["body"] == body for c in comments):
@@ -268,7 +277,7 @@ class GitHubActivities:
         existing = await self._get(f"/repos/{input.repo}/pulls?state=open&head={owner}:{input.head}")
         pr = existing[0] if existing else await self._post(
             f"/repos/{input.repo}/pulls",
-            {"title": input.title, "head": input.head, "base": input.base, "body": _bot(input.body)},
+            {"title": input.title, "head": input.head, "base": input.base, "body": _bot(input.body, input.agent)},
         )
         return PullRequest(number=pr["number"], url=pr["html_url"], head_sha=pr["head"]["sha"])
 
@@ -290,21 +299,23 @@ class GitHubActivities:
         required commit status is the gate. If GitHub rejects a line (it isn't in the diff),
         the comments go in the review body instead."""
         verdict = "✅ Looks good" if input.review.verdict == "approve" else "🔁 Changes requested"
-        summary = [f"**{input.reviewer}**: {verdict}", "", input.review.summary]
+        summary = [f"**{verdict}**", "", input.review.summary]
         inline = [c for c in input.review.comments if c.line]
         listed = [c for c in input.review.comments if not c.line]
         path = f"/repos/{input.repo}/pulls/{input.pr_number}/reviews"
-        if any(BOT_MARKER in (r.get("body") or "") and summary[0] in r.get("body", "")
+        if any(BOT_MARKER in (r.get("body") or "") and f"**{input.reviewer}**" in r.get("body", "")
                and input.review.summary in r.get("body", "") for r in await self._get(path)):
             return  # an earlier attempt posted it
-        body = _bot("\n".join(summary + [f"- `{c.file}`: {c.comment}" for c in listed]))
+        body = _bot("\n".join(summary + [f"- `{c.file}`: {c.comment}" for c in listed]), input.reviewer)
         payload = {"body": body, "event": "COMMENT",
-                   "comments": [{"path": c.file, "line": c.line, "side": "RIGHT", "body": c.comment} for c in inline]}
+                   # Inline comments come back as webhooks too: mark them (unlabeled, to keep them short).
+                   "comments": [{"path": c.file, "line": c.line, "side": "RIGHT", "body": f"{BOT_MARKER}\n{c.comment}"}
+                                for c in inline]}
         response = await self._request("POST", path, payload, allow={200, 422})
         if response.status_code == 422:
             everything = summary + [f"- `{c.file}`" + (f" line {c.line}" if c.line else "") + f": {c.comment}"
                                     for c in input.review.comments]
-            await self._post(path, {"body": _bot("\n".join(everything)), "event": "COMMENT"})
+            await self._post(path, {"body": _bot("\n".join(everything), input.reviewer), "event": "COMMENT"})
 
     @activity.defn
     async def merge_pull_request(self, input: MergePrInput) -> str:
@@ -359,7 +370,8 @@ class GitHubActivities:
 
     @activity.defn
     async def close_pull_request(self, input: ClosePrInput) -> None:
-        await self.comment_on_issue(CommentInput(repo=input.repo, issue_number=input.pr_number, body=input.comment))
+        await self.comment_on_issue(CommentInput(repo=input.repo, issue_number=input.pr_number, body=input.comment,
+                                                 agent=input.agent))
         await self._request("PATCH", f"/repos/{input.repo}/pulls/{input.pr_number}", {"state": "closed"})
 
     @activity.defn
@@ -383,7 +395,7 @@ class GitHubActivities:
 
     @activity.defn
     async def update_pull_request(self, input: UpdatePrInput) -> None:
-        await self._request("PATCH", f"/repos/{input.repo}/pulls/{input.number}", {"body": _bot(input.body)})
+        await self._request("PATCH", f"/repos/{input.repo}/pulls/{input.number}", {"body": _bot(input.body, input.agent)})
 
     @activity.defn
     async def open_issue_for_copy(self, input: ScenarioInput) -> ScenarioStarted:
@@ -509,11 +521,17 @@ class GitHubActivities:
         return response
 
 
-def _bot(body: str) -> str:
-    """Mark text the agents post. They post with the demo's PAT, so on GitHub their comments look
-    like the token owner's; the marker is how the webhook and the catch-up read tell them apart.
-    It goes first (GitHub doesn't render it), so nothing that shortens a comment can drop it."""
-    return body if BOT_MARKER in body else f"{BOT_MARKER}\n{body}"
+def _bot(body: str, agent: str) -> str:
+    """Mark and label text the demo posts. It posts with the demo's PAT, so on GitHub every comment
+    looks like the token owner's. People see a label saying which agent wrote it (🤖), or the
+    pipeline itself (⚙️), and a footer saying how it was posted. The hidden marker is how the
+    webhook and the catch-up read tell these from people's comments; it goes first, so nothing
+    that shortens a comment can drop it."""
+    if BOT_MARKER in body:
+        return body
+    icon = "⚙️" if agent == PIPELINE else "🤖"
+    return (f"{BOT_MARKER}\n{icon} **{agent}**\n\n{body}\n\n"
+            "<sub>Posted by the agentic SDLC demo's agents with the demo's GitHub token.</sub>")
 
 
 def _human(raw: dict, number: int, kind: str, *, file: str | None = None) -> HumanComment | None:

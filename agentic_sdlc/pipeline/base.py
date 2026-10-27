@@ -30,6 +30,9 @@ with workflow.unsafe.imports_passed_through():
     from agentic_sdlc.activities.agent_turn import AgentTurn, AgentTurnActivities, AgentTurnResult
     from agentic_sdlc.activities.checks import CheckActivities
     from agentic_sdlc.activities.github import (
+        CODER,
+        PIPELINE,
+        PLANNER,
         ClosePrInput,
         CommentInput,
         CommentsInput,
@@ -128,9 +131,10 @@ class AgentRun:
                 self._refs.append(ref)
         workflow.upsert_search_attributes([GITHUB_REFS.value_set(self._refs)])
 
-    async def _post(self, number: int, body: str, **extra) -> None:
+    async def _post(self, number: int, body: str, *, agent: str = PIPELINE, **extra) -> None:
+        """Comment on an issue or PR, labeled with who wrote it: an agent, or the pipeline."""
         await workflow.execute_activity_method(GitHubActivities.comment_on_issue, CommentInput(
-            repo=self._request.repo, issue_number=number, body=body, **extra), **GITHUB)
+            repo=self._request.repo, issue_number=number, body=body, agent=agent, **extra), **GITHUB)
 
     async def _set_check(self, branch: str, state: str, description: str) -> None:
         """The agent's required check on the PR: pending blocks merging; success or failure says
@@ -366,7 +370,8 @@ class AgentRun:
                 if item.kind == "scope_change":
                     await self._post(pr.number, f"> **@{item.author}**: {item.text[:300]}\n\n"
                                                 f"That's outside this PR's scope ({item.reason}). Open an issue for it "
-                                                "and label it `agent` if you'd like the agents to take it on.")
+                                                "and label it `agent` if you'd like the agents to take it on.",
+                                     agent=PLANNER)
                     self._resolve(item, "addressed", "Out of scope for this PR; suggested an issue")
             if in_scope:
                 await self._address_on_pr(pr, plan, in_scope)
@@ -378,7 +383,8 @@ class AgentRun:
             who = ", ".join(sorted({f"@{c.author}" for c in comments}))
             if pr.from_fork:
                 await self._post(pr.number, "This PR comes from a fork, which the agents can't push to. "
-                                            "Here's what they'd change:\n\n" + "\n".join(f"- {c.text}" for c in comments))
+                                            "Here's what they'd change:\n\n" + "\n".join(f"- {c.text}" for c in comments),
+                                 agent=CODER)
                 for item in comments:
                     self._resolve(item, "addressed", "Fork PR: suggested rather than pushed")
                 return
@@ -390,8 +396,8 @@ class AgentRun:
                 id="pr-feedback", title="Address comments on the pull request",
                 description="\n".join(f"- @{c.author}: {c.text}" for c in comments)))
             quoted = "\n".join(f"> **@{c.author}**: {c.text[:300]}" for c in comments)
-            await self._post(pr.number, f"{quoted}\n\n🛠️ Addressed by the coding agent: {reply.summary}\n\n"
-                                        "The reviewer agent is checking the change again.")
+            await self._post(pr.number, f"{quoted}\n\n🛠️ Addressed: {reply.summary}\n\n"
+                                        "The reviewer agent is checking the change again.", agent=CODER)
             for item in comments:
                 self._resolve(item, "addressed", reply.summary)
             self._prove("D7", f"{who}'s comment on the PR was addressed by a coding agent and re-reviewed, without starting over")

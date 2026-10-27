@@ -18,7 +18,7 @@ from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from agentic_sdlc.activities.checks import CheckActivities, TestRun
-    from agentic_sdlc.activities.github import GitHubActivities, PullRequestInfo, PullRequestRef, UpdatePrInput
+    from agentic_sdlc.activities.github import CODER, GitHubActivities, PullRequestInfo, PullRequestRef, UpdatePrInput
     from agentic_sdlc.models import (
         CodeReply,
         DiagnoseReply,
@@ -109,7 +109,7 @@ class DependencyRepair(AgentRun):
             diagnosis = reply.diagnosis
             self._state.diagnosis = diagnosis
             self._detail("diagnose", diagnosis.root_cause)
-            await self._post(pr.number, _diagnosis_comment(package, after, diagnosis))
+            await self._post(pr.number, _diagnosis_comment(package, after, diagnosis), agent=CODER)
             return diagnosis
 
     async def _fix(self, workspace: Workspace, plan: Plan, diagnosis: Diagnosis) -> CodeReply:
@@ -126,7 +126,7 @@ class DependencyRepair(AgentRun):
         async with self._step("explain"):
             body = _explanation(pr, package, before, after, diagnosis, tests, fix)
             await workflow.execute_activity_method(GitHubActivities.update_pull_request, UpdatePrInput(
-                repo=self._request.repo, number=pr.number, body=body), **GITHUB)
+                repo=self._request.repo, number=pr.number, body=body, agent=CODER), **GITHUB)
             self._detail("explain", "PR description rewritten: the bump, what broke, what changed and why")
 
     async def _review(self, pr: PullRequestInfo, plan: Plan) -> None:
@@ -204,4 +204,4 @@ def _explanation(pr: PullRequestInfo, package: str, before: str, after: str, d: 
 {pr.body}
 </details>
 
-Diagnosed, fixed and explained by the agentic SDLC pipeline's coding agent, then reviewed by its review agent."""
+Diagnosed, fixed and explained by the coding agent, then reviewed by the review agent."""

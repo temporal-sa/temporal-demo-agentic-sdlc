@@ -227,10 +227,20 @@ def test_a_long_bot_comment_is_ignored_too():
 def test_the_marker_leads_every_bot_comment():
     from agentic_sdlc.activities.github import _bot
 
-    long_plan = _bot("### Plan\n" + "- criterion\n" * 500)
+    long_plan = _bot("### Plan\n" + "- criterion\n" * 500, "Planner agent")
     assert long_plan[:4000].startswith(BOT_MARKER)
-    assert _bot(long_plan) == long_plan  # marking twice changes nothing
+    assert _bot(long_plan, "Planner agent") == long_plan  # marking twice changes nothing
     assert webhooks.route("issue_comment", comment_event(body=long_plan)) == []
+
+
+def test_comments_say_which_agent_or_the_pipeline_wrote_them():
+    """The demo posts with its PAT, so on GitHub the author is always the token's owner."""
+    from agentic_sdlc.activities.github import _bot
+
+    planner = _bot("Here's the plan.", "Planner agent").splitlines()
+    assert planner[1] == "🤖 **Planner agent**"
+    assert "posted by the agentic sdlc demo" in planner[-1].lower()
+    assert _bot("Staging passed.", "Pipeline").splitlines()[1] == "⚙️ **Pipeline**"
 
 
 def test_the_catch_up_read_skips_long_bot_comments():

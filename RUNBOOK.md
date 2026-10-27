@@ -23,6 +23,7 @@ The seven decision criteria in the console's left rail are the problems, and eac
 ## Before you start
 
 - **Where it runs.** Hosted, the demo is `https://agentic-sdlc.tmprl-demo.cloud`, and a crashable workspace gives you your own copy with a crash button. Locally, run [`scripts/dev.py`](#run-it-locally).
+- **Agent comments show your GitHub account as the author.** The demo posts with its PAT, so GitHub attributes every comment to the token's owner. Each one starts with who really wrote it: **🤖 Planner agent**, **🤖 Coding agent**, **🤖 Code review agent**, or **⚙️ Pipeline** for the Workflow's own messages (gates, status, the release). Worth saying out loud the first time the audience sees one.
 - **It's all on one real repo:** [temporal-sa/agentic-sdlc-storefront](https://github.com/temporal-sa/agentic-sdlc-storefront). Every copy of the demo shares it. Each copy labels what it starts (`agentic-sdlc:<copy>`) and only acts on its own label, so you never pick up someone else's PR. `main` is locked: the agents get PRs to "ready to merge", and nothing merges.
 - **Real calls cost real money.** A dependency repair or review costs about $0.10 to $0.60 in estimated model spend; an issue run $0.20 to $1.50. The per-run budget is $3.
 - **Ship one issue run before the audience arrives.** Act 1 opens with the result. Start an issue scenario on auto merge, reply `/approve` and `/ship` on the issue, and let it finish (about 5 minutes).
@@ -89,7 +90,7 @@ Keys: **1–6** switch acts, **N** starts a scenario.
 
 **Do:** reply on the PR: *"Please fix the rounding and the 3-item case."*
 
-**The audience sees** the comment in the console's **Conversation** tab within a second or two. The planner triages it as **feedback**, a coding agent pushes a fix to the PR branch, the tests run, the reviewer looks again, and the agent answers on the PR ("Addressed by the coding agent…"). The check turns green. **D7** ticks.
+**The audience sees** the comment in the console's **Conversation** tab within a second or two. The planner triages it as **feedback**, a coding agent pushes a fix to the PR branch, the tests run, the reviewer looks again, and the agent answers on the PR ("🤖 Coding agent … 🛠️ Addressed: …"). The check turns green. **D7** ticks.
 
 **Say:** "The developer never left GitHub. The comment is a Signal to a Workflow that was waiting, at no cost, for someone to say something."
 

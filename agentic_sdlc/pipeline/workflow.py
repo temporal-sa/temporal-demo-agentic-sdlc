@@ -28,6 +28,8 @@ with workflow.unsafe.imports_passed_through():
     from agentic_sdlc.activities.checks import CheckActivities
     from agentic_sdlc.activities.deploy import CheckInput, CheckResult, DeployActivities, DeployCall
     from agentic_sdlc.activities.github import (
+        CODER,
+        PLANNER,
         BranchesInput,
         ClosePrInput,
         GitHubActivities,
@@ -136,7 +138,7 @@ class IssueToProduction(AgentRun):
                 self._skip("gate:clarify", "The planner had no questions")
                 return None
             self._detail("clarify", f"{_count(len(questions), 'question')} for the developer")
-            await self._post(repo.issue_number, _questions_comment(questions))
+            await self._post(repo.issue_number, _questions_comment(questions), agent=PLANNER)
         outcome = await self._wait_for_people(
             "clarify", "The planner asked its questions on the issue", questions=questions,
             commands=["/skip"], issue=repo.issue_number, github_url=repo.issue_url)
@@ -157,7 +159,8 @@ class IssueToProduction(AgentRun):
                 plan.subtasks = plan.subtasks[:3]
                 self._state.plan = plan
                 self._detail("plan", f"{len(plan.subtasks)} subtask(s): " + ", ".join(s.title for s in plan.subtasks))
-                await self._post(repo.issue_number, _plan_comment(plan, self._state.plan_revision), labels=["agent-plan"])
+                await self._post(repo.issue_number, _plan_comment(plan, self._state.plan_revision), agent=PLANNER,
+                                 labels=["agent-plan"])
             outcome = await self._wait_for_people(
                 "plan", "The plan is on the issue, waiting for /approve", plan.summary,
                 commands=["/approve"], issue=repo.issue_number, github_url=repo.issue_url)
@@ -335,8 +338,8 @@ class IssueToProduction(AgentRun):
                 id="pr-feedback", title="Address comments on the pull request",
                 description="\n".join(f"- @{c.author}: {c.text}" for c in comments)), lane="feedback")
             quoted = "\n".join(f"> **@{c.author}**: {c.text[:300]}" for c in comments)
-            await self._post(pr.number, f"{quoted}\n\n🛠️ Addressed by the coding agent: {reply.summary}\n\n"
-                                        "The reviewer agent is checking the change again.")
+            await self._post(pr.number, f"{quoted}\n\n🛠️ Addressed: {reply.summary}\n\n"
+                                        "The reviewer agent is checking the change again.", agent=CODER)
             for item in comments:
                 self._resolve(item, "addressed", reply.summary)
             self._detail("feedback", reply.summary)
@@ -353,6 +356,7 @@ class IssueToProduction(AgentRun):
             repo=repo.repo, pr_number=pr.number,
             comment=f"🔁 This changes the scope: {change.reason}\n\nClosing this PR. The planner will revise the plan "
                     "on the issue, and it needs `/approve` again before agents write more code.",
+            agent=PLANNER,
         ), **GITHUB)
         self._state.plan_revision += 1
         self._resolve(change, "addressed", f"The plan went back for revision {self._state.plan_revision}")
@@ -516,14 +520,14 @@ def _initial_steps() -> list[Step]:
 
 
 def _questions_comment(questions: list[str]) -> str:
-    lines = ["### ❓ The planner agent has questions before it plans", ""]
+    lines = ["### ❓ Questions before I plan", ""]
     lines += [f"{i}. {q}" for i, q in enumerate(questions, 1)]
     lines += ["", "Reply here with your answers, or `/skip` to let the planner decide."]
     return "\n".join(lines)
 
 
 def _plan_comment(plan: Plan, revision: int = 1) -> str:
-    heading = "### 🗺️ Plan from the planner agent" + (f" (revision {revision})" if revision > 1 else "")
+    heading = "### 🗺️ Plan" + (f" (revision {revision})" if revision > 1 else "")
     lines = [heading, "", plan.summary, "", "**Acceptance criteria**"]
     lines += [f"- {c}" for c in plan.acceptance_criteria]
     lines += ["", "**Subtasks** (one coding agent each, in parallel)"]
