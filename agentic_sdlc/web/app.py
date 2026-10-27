@@ -169,8 +169,11 @@ async def _list_runs() -> list[dict]:
     async for execution in state.temporal.list_workflows(query, limit=20):
         memo = await execution.memo_value("run", default=None)
         if memo:
-            runs.append({**_run_summary(memo), "workflow_id": execution.id, "temporal_run_id": execution.run_id,
-                         "closed": execution.status != WorkflowExecutionStatus.RUNNING})
+            closed = execution.status != WorkflowExecutionStatus.RUNNING
+            summary = _run_summary(memo)
+            if closed and summary["status"] in ("running", "waiting"):
+                summary["status"] = "stopped"  # terminated by Reset: the Workflow never got to say so
+            runs.append({**summary, "workflow_id": execution.id, "temporal_run_id": execution.run_id, "closed": closed})
     return sorted(runs, key=lambda r: r["started_at"], reverse=True)
 
 
@@ -200,6 +203,8 @@ async def _run_view(workflow_id: str) -> dict | None:
     if memo is None:
         return None
     run = RunState.model_validate(memo)
+    if description.status != WorkflowExecutionStatus.RUNNING and run.status in ("running", "waiting"):
+        run.status = "stopped"  # terminated by Reset: the Workflow never got to say so
     agent_ids = [a.workflow_id for a in run.agents]
     agent_descriptions, env, workers, armed = await asyncio.gather(
         asyncio.gather(*(_describe_quietly(a) for a in agent_ids)),

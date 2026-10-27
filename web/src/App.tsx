@@ -14,7 +14,13 @@ export function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const { data: session, refresh } = usePoll<Overview>("/api/overview", 3000);
   const [act, setAct] = useState<ActKey>("live");
-  const [runId, setRunId] = useState<string | null>(() => new URLSearchParams(location.search).get("run"));
+  const [runId, setRunId] = useState<string | null>(() => {
+    // A stale link (an old run ID format) would 400 on every stream reconnect.
+    const fromUrl = new URLSearchParams(location.search).get("run");
+    return fromUrl && /^(issue|pr|review)-\d{1,7}$/.test(fromUrl) ? fromUrl : null;
+  });
+  // After Reset, stay idle instead of jumping back to the run it just stopped.
+  const [idleAfterReset, setIdleAfterReset] = useState(false);
   const [dialog, setDialog] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   // After starting a scenario, switch to the next new run once its webhook has started it.
@@ -23,13 +29,17 @@ export function App() {
 
   useEffect(() => { api<Config>("/api/config").then(setConfig).catch((e) => setToast(e.message)); }, []);
   useEffect(() => {
-    if (!runId && session?.runs.length) setRunId(session.runs[0].run_id);
+    if (!runId && session?.runs.length) {
+      const open = session.runs.find((r) => !r.closed);
+      if (open) { setRunId(open.run_id); setIdleAfterReset(false); }
+      else if (!idleAfterReset) setRunId(session.runs[0].run_id);
+    }
     if (followNext !== null && session?.runs.length && session.runs[0].run_id !== followNext) {
       setRunId(session.runs[0].run_id);
       setAct("live");
       setFollowNext(null);
     }
-  }, [session, runId, followNext]);
+  }, [session, runId, followNext, idleAfterReset]);
   useEffect(() => {
     const url = new URL(location.href);
     if (runId) url.searchParams.set("run", runId); else url.searchParams.delete("run");
@@ -131,7 +141,7 @@ export function App() {
         <div className="bar-group">
           <button className="button small secondary ultraviolet" onClick={() => {
             if (confirm(`Stop this copy's runs, empty its environments, and close its issues and PRs labeled ${config.owner_label}?`)) {
-              control("/api/reset").then(() => setRunId(null));
+              control("/api/reset").then(() => { setIdleAfterReset(true); setRunId(null); });
             }
           }}>Reset</button>
         </div>
