@@ -98,7 +98,47 @@ class PlanRequest(BaseModel):
 
     issue_title: str
     issue_body: str
+    clarifications: str | None = Field(default=None, description="The developer's answers to your questions.")
     feedback: str | None = None
+
+
+class Clarification(BaseModel):
+    """Questions the planner needs answered before it can plan well."""
+
+    questions: list[str] = Field(
+        description="Zero to three short questions about decisions the issue leaves open. Empty if nothing material is open."
+    )
+
+
+class ClarifyReply(BaseModel):
+    """The planner's questions and what they cost to ask."""
+
+    clarification: Clarification
+    usage: Usage = Field(default_factory=Usage)
+
+
+class Triage(BaseModel):
+    """Whether a person's comment on the work fits the approved plan or changes it."""
+
+    kind: Literal["feedback", "scope_change"] = Field(
+        description="feedback: can be addressed within the approved plan and acceptance criteria. "
+        "scope_change: adds, removes or changes a requirement, so the plan needs re-approval."
+    )
+    reason: str = Field(description="One sentence explaining the classification, addressed to the commenter.")
+
+
+class TriageRequest(BaseModel):
+    """Classify a comment against the approved plan."""
+
+    plan: Plan
+    comment: str
+
+
+class TriageReply(BaseModel):
+    """The classification and what it cost."""
+
+    triage: Triage
+    usage: Usage = Field(default_factory=Usage)
 
 
 class PlanReply(BaseModel):
@@ -129,6 +169,7 @@ class ReviewComment(BaseModel):
     """One actionable comment on one file."""
 
     file: str
+    line: int | None = Field(default=None, description="Line number in the new version of the file, if the comment is about one line.")
     comment: str
 
 
@@ -147,6 +188,32 @@ class ReviewRequest(BaseModel):
     plan: Plan
     diff: str
     focus: Literal["quality", "security"] = "quality"
+
+
+class DiagnoseRequest(BaseModel):
+    """Work out why a dependency upgrade breaks the code."""
+
+    package: str
+    from_version: str
+    to_version: str
+    test_output: str
+    diff: str
+
+
+class Diagnosis(BaseModel):
+    """Why a dependency upgrade breaks the code, and how to fix it."""
+
+    what_changed: str = Field(description="What changed in the dependency, citing its changelog.")
+    what_broke: str = Field(description="Which of our tests or behaviors broke, and how they failed.")
+    root_cause: str = Field(description="Why our code breaks against the new version.")
+    fix_plan: str = Field(description="The code changes needed, file by file.")
+
+
+class DiagnoseReply(BaseModel):
+    """The diagnosis and what it cost."""
+
+    diagnosis: Diagnosis
+    usage: Usage = Field(default_factory=Usage)
 
 
 class ReviewReply(BaseModel):
@@ -173,10 +240,33 @@ class Step(BaseModel):
 
 
 class Gate(BaseModel):
-    key: Literal["plan", "merge", "production", "budget"]
+    """What the run is waiting for people to say on GitHub."""
+
+    key: Literal["clarify", "plan", "merge", "production", "budget", "conversation"]
     question: str
     context: str = ""
     waiting_since: float
+    questions: list[str] = Field(default_factory=list)  # the planner's, at the clarify gate
+    commands: list[str] = Field(default_factory=list)  # e.g. ["/approve"]; other comments are conversation
+    # When the gate decides by itself if nobody speaks up (the auto-merge review window).
+    closes_at: float | None = None
+    github_url: str | None = None  # where to reply
+
+
+class Feedback(BaseModel):
+    """Something a person said to the agents on GitHub, and what became of it."""
+
+    id: str
+    source: Literal["github"] = "github"
+    author: str
+    text: str
+    url: str | None = None
+    at: float
+    stage: str  # the gate or lane it arrived at
+    kind: Literal["answer", "plan_feedback", "feedback", "scope_change", "steer", "command", "noted"] | None = None
+    reason: str = ""
+    status: Literal["received", "working", "addressed", "replanning", "queued"] = "received"
+    outcome: str = ""
 
 
 class AgentRef(BaseModel):
@@ -189,16 +279,21 @@ class AgentRef(BaseModel):
 class Proof(BaseModel):
     """Evidence that a decision criterion was shown live, for the scorecard."""
 
-    criterion: Literal["D1", "D2", "D3", "D4", "D5", "D6"]
+    criterion: Literal["D1", "D2", "D3", "D4", "D5", "D6", "D7"]
     detail: str
     at: float
 
 
+RunKind = Literal["issue", "dependency", "review"]
+CommitState = Literal["pending", "success", "failure", "error"]
+
+
 class RunState(BaseModel):
     run_id: str
+    kind: RunKind = "issue"
     version: str
     title: str
-    status: Literal["running", "waiting", "completed", "rolled_back", "failed", "cancelled"] = "running"
+    status: Literal["running", "waiting", "completed", "rolled_back", "failed", "cancelled", "stopped"] = "running"
     steps: list[Step] = Field(default_factory=list)
     gate: Gate | None = None
     agents: list[AgentRef] = Field(default_factory=list)
@@ -207,29 +302,48 @@ class RunState(BaseModel):
     issue_url: str | None = None
     pr_url: str | None = None
     revert_pr_url: str | None = None
+    check: CommitState | None = None  # the agent's required check on the PR
+    check_description: str = ""
+    diagnosis: Diagnosis | None = None
     plan: Plan | None = None
     review: Review | None = None
     staging_sha: str | None = None
     canary_sha: str | None = None
     proofs: list[Proof] = Field(default_factory=list)
+    conversation: list[Feedback] = Field(default_factory=list)
+    plan_revision: int = 1
     started_at: float = 0.0
     ended_at: float | None = None
 
 
 class RunRequest(BaseModel):
-    run_id: str
-    owner: str
-    issue_title: str
-    issue_body: str
+    """A run started by something happening on GitHub: an issue labeled for the agents, a
+    dependency-bump PR, or a person's PR to review."""
+
+    run_id: str  # e.g. "issue-12"; the Workflow ID is "<task queue>.gh.<run_id>"
+    kind: RunKind = "issue"
+    repo: str
+    issue_number: int | None = None
+    pr_number: int | None = None
+    title: str = ""
+    body: str = ""
     models: RoleModels = Field(default_factory=RoleModels)
     autonomy: Autonomy = "auto"
     budget_usd: float = 3.0
     canary_bake_seconds: int = 90
     canary_check_seconds: int = 15
+    # Auto merge waits this long after an approving review, so people can still comment on the PR.
+    review_window_seconds: int = 60
+    # A review or repaired PR keeps listening for comments this long after the last one.
+    idle_close_hours: float = 24.0
+    console_url: str | None = None  # linked from the commit status
 
 
-class GateDecision(BaseModel):
-    approve: bool
-    feedback: str | None = None
-    raise_budget_usd: float | None = None
+class Command(BaseModel):
+    """A slash command someone typed at the start of a comment, e.g. "/stop not before Friday"."""
+
+    name: str
+    argument: str = ""
+
+
 

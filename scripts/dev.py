@@ -1,7 +1,16 @@
 """Run the whole demo locally, with presenter controls for the worker.
 
-    uv run python scripts/dev.py            # Temporal, Redis, web on :8000, a v1 worker
+    uv run python scripts/dev.py            # Temporal, Redis, web on :8000, v1 and v2 workers, GitHub webhooks
     uv run python scripts/dev.py --no-temporal   # use a Temporal you started yourself
+
+GitHub reaches a laptop through `gh webhook forward` (the cli/gh-webhook extension, installed if
+missing), which relays the storefront repo's events to localhost:8000/webhooks/github while this
+runs. GitHub allows one forwarder per repo at a time; if someone else is forwarding, this stops
+and says so. Your gh login needs the admin:repo_hook scope (`gh auth refresh -s admin:repo_hook`).
+
+This laptop is its own copy of the demo: task queue `local-<your GitHub login>`, and it acts only
+on issues and PRs labeled `agentic-sdlc:local-<login>`, which "Start a scenario" adds. The hosted
+demo ignores that label, so the two never pick up each other's work.
 
 It supervises the processes and listens on 127.0.0.1:8765 for the console's controls:
 
@@ -18,6 +27,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -31,6 +42,8 @@ ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / ".logs"
 CONTROL_PORT = 8765
 TEMPORAL = ["temporal", "--disable-config-file", "--address", "localhost:7233"]
+WEBHOOK_EVENTS = "issues,issue_comment,pull_request,pull_request_review,pull_request_review_comment"
+SEARCH_ATTRIBUTE = ["--name", "AgenticSdlcGitHubRefs", "--type", "KeywordList"]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--no-temporal", action="store_true", help="don't start a Temporal dev server")
@@ -39,12 +52,60 @@ args = parser.parse_args()
 
 LOGS.mkdir(exist_ok=True)
 processes: dict[str, subprocess.Popen] = {}
+envs: dict[str, dict] = {}  # each process's extra environment, reused when it restarts
 workers: dict[str, subprocess.Popen] = {}  # version -> process
 wanted_versions: list[str] = ["v1", "v2"]
 lock = threading.Lock()
+copy_env: dict[str, str] = {}  # this laptop's copy of the demo, for the web server and the workers
+
+
+def gh_login() -> str:
+    found = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True)
+    if found.returncode != 0:
+        sys.exit("The GitHub CLI isn't signed in. Run `gh auth login`; webhooks reach this laptop through it.")
+    return re.sub(r"[^a-z0-9-]", "-", found.stdout.strip().lower())
+
+
+def this_copy() -> dict[str, str]:
+    """Task queue, owner label and a webhook secret for this laptop's copy of the demo."""
+    name = f"local-{gh_login()}"
+    return {
+        "TEMPORAL_TASK_QUEUE": name,
+        "OWNER_LABEL": f"agentic-sdlc:{name}",
+        # The forwarder signs what it relays with this, and the web server checks it.
+        "GITHUB_WEBHOOK_SECRET": os.environ.get("GITHUB_WEBHOOK_SECRET") or secrets.token_hex(20),
+        "PUBLIC_URL": f"http://localhost:{args.port}",
+    }
+
+
+def repo() -> str:
+    for line in (ROOT / ".env.local").read_text().splitlines() if (ROOT / ".env.local").exists() else []:
+        if line.startswith("GITHUB_SANDBOX_REPO="):
+            return line.split("=", 1)[1].strip()
+    return os.environ.get("GITHUB_SANDBOX_REPO", "temporal-sa/agentic-sdlc-storefront")
+
+
+def forward_webhooks() -> None:
+    """Relay the storefront repo's GitHub events to the local web server."""
+    extensions = subprocess.run(["gh", "extension", "list"], capture_output=True, text=True).stdout
+    if "gh-webhook" not in extensions:
+        print("Installing the gh webhook extension (cli/gh-webhook)…")
+        if subprocess.run(["gh", "extension", "install", "cli/gh-webhook"]).returncode != 0:
+            sys.exit("Couldn't install cli/gh-webhook; GitHub's webhooks can't reach this laptop without it.")
+    processes["webhooks"] = spawn("webhooks", [
+        "gh", "webhook", "forward", f"--repo={repo()}", f"--events={WEBHOOK_EVENTS}",
+        f"--url=http://localhost:{args.port}/webhooks/github", f"--secret={copy_env['GITHUB_WEBHOOK_SECRET']}",
+    ])
+    time.sleep(4)
+    if processes["webhooks"].poll() is not None:
+        tail = (LOGS / "webhooks.log").read_text().strip().splitlines()[-5:]
+        sys.exit("GitHub webhook forwarding didn't start:\n  " + "\n  ".join(tail) + "\n"
+                 "If someone else is forwarding this repo, only one forwarder can run at a time. If it's a "
+                 "permissions error, run `gh auth refresh -s admin:repo_hook`.")
 
 
 def spawn(name: str, argv: list[str], env: dict | None = None) -> subprocess.Popen:
+    envs[name] = env or {}
     log = open(LOGS / f"{name}.log", "a")
     log.write(f"\n--- {time.strftime('%H:%M:%S')} starting {name}\n")
     log.flush()
@@ -57,7 +118,7 @@ def start_worker(version: str) -> None:
     if proc and proc.poll() is None:
         return
     workers[version] = spawn(f"worker-{version}", [sys.executable, "-m", "agentic_sdlc.worker"], {
-        "TEMPORAL_WORKER_BUILD_ID": version, "PIPELINE_VERSION": version,
+        **copy_env, "TEMPORAL_WORKER_BUILD_ID": version, "PIPELINE_VERSION": version,
     })
 
 
@@ -114,15 +175,22 @@ def main() -> None:
             sys.exit("redis-server isn't installed (brew install redis)")
         processes["redis"] = spawn("redis", ["redis-server", "--port", "6379", "--save", "", "--appendonly", "no"])
         wait_for(["redis-cli", "ping"], "Redis")
+    # The webhook finds the runs watching an issue or PR by this search attribute.
+    exists = subprocess.run([*TEMPORAL, "operator", "search-attribute", "list"], capture_output=True, text=True).stdout
+    if "AgenticSdlcGitHubRefs" not in exists:
+        subprocess.run([*TEMPORAL, "operator", "search-attribute", "create", *SEARCH_ATTRIBUTE], check=True, capture_output=True)
 
+    copy_env.update(this_copy())
     for version in wanted_versions:
         start_worker(version)
     processes["web"] = spawn("web", [sys.executable, "-m", "uvicorn", "agentic_sdlc.web.app:app", "--port", str(args.port)],
-                             {"SUPERVISOR_URL": f"http://127.0.0.1:{CONTROL_PORT}"})
+                             {**copy_env, "SUPERVISOR_URL": f"http://127.0.0.1:{CONTROL_PORT}"})
+    forward_webhooks()
     server = ThreadingHTTPServer(("127.0.0.1", CONTROL_PORT), Control)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"Console:     http://localhost:{args.port}")
     print("Temporal UI: http://localhost:8233")
+    print(f"GitHub:      {repo()} events forwarded here; this copy acts on items labeled {copy_env['OWNER_LABEL']}")
     print("Logs:        .logs/   (Ctrl-C stops everything)")
     try:
         while True:
@@ -130,7 +198,7 @@ def main() -> None:
             for name, proc in list(processes.items()):
                 if proc.poll() is not None:
                     print(f"{name} exited ({proc.returncode}); restarting. See .logs/{name}.log")
-                    processes[name] = spawn(name, proc.args)  # type: ignore[arg-type]
+                    processes[name] = spawn(name, proc.args, envs.get(name))  # type: ignore[arg-type]
     except KeyboardInterrupt:
         pass
     finally:

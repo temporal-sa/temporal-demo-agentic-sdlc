@@ -1,0 +1,53 @@
+# Pushes a Dependabot-style branch that bumps one dependency. The agentic SDLC demo triggers it
+# (or you can, from the Actions tab), then hands the presenter GitHub's prefilled "Open a pull
+# request" page for the branch. Opening that PR starts the demo's agents: they check whether the
+# bump breaks anything, fix the code if it does, and explain the change on the PR.
+#
+# It doesn't open the PR itself: the organization doesn't let Actions open pull requests, and a
+# person opening it is the developer's part of the story. A fresh branch every run, so several
+# people can run the demo at once.
+name: Dependency bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Dependency to bump
+        default: orbit-money
+      to_version:
+        description: Version to bump to
+        default: "2.0.0"
+      branch:
+        description: Branch to push (the demo picks one; leave empty to name it after this run)
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push the bump branch
+        env:
+          PACKAGE: ${{ inputs.package }}
+          TO: ${{ inputs.to_version }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          spec=$(node -p "require('./package.json').dependencies[process.env.PACKAGE]")
+          repo="${spec#github:}"; repo="${repo%%#*}"
+          from="${spec##*#v}"
+          branch="${BRANCH:-dependency-bump/${PACKAGE}-${TO}-${GITHUB_RUN_ID}}"
+          git switch -c "$branch"
+          npm pkg set "dependencies.${PACKAGE}=github:${repo}#v${TO}"
+          sed -i "s|${repo}@v${from}|${repo}@v${TO}|" index.html
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Bump ${PACKAGE} from ${from} to ${TO}"
+          git push origin "$branch"
+          title="Bump ${PACKAGE} from ${from} to ${TO}"
+          echo "### Open the pull request" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[${title}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1&labels=dependencies)" >> "$GITHUB_STEP_SUMMARY"

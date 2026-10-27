@@ -23,7 +23,9 @@ from agentic_sdlc.activities import ACTIVITY_CLASSES
 from agentic_sdlc.agents.runtime import ALL_AGENTS
 from agentic_sdlc.agents.tools import ALL_TOOLS
 from agentic_sdlc.agents.workflows import CoderAgent, PlannerAgent, ReviewerAgent
+from agentic_sdlc.pipeline.dependency import DependencyRepair
 from agentic_sdlc.pipeline.environments import Environments
+from agentic_sdlc.pipeline.review import PullRequestReview
 from agentic_sdlc.pipeline.workflow import IssueToProduction
 from agentic_sdlc.sandbox import workflow_runner
 from agentic_sdlc.temporal_client import connect
@@ -47,7 +49,8 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=config.TASK_QUEUE,
-        workflows=[IssueToProduction, Environments, PlannerAgent, CoderAgent, ReviewerAgent],
+        workflows=[IssueToProduction, DependencyRepair, PullRequestReview, Environments,
+                   PlannerAgent, CoderAgent, ReviewerAgent],
         activities=activities,
         plugins=[AgentPlugin(agent) for agent in ALL_AGENTS],
         deployment_config=deployment,

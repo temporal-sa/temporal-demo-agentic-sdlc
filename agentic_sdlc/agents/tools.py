@@ -15,6 +15,7 @@ import asyncio
 import base64
 import contextlib
 import functools
+import json
 import hashlib
 import os
 import shutil
@@ -135,9 +136,11 @@ async def edit_file(workspace: Injected[Workspace], path: str, old_text: str, ne
 @agent.activity_tool_defn(inherently_safe=True, activity_config=TEST_ACTIVITY)
 @_heartbeats
 async def run_tests(workspace: Injected[Workspace]) -> str:
-    """Run the test suite (`node --test tests/`) and return the result."""
+    """Install the dependencies in package.json, then run the test suite (`node --test tests/`)
+    and return the result. Afterwards a dependency's files, such as its changelog, can be read
+    under node_modules/<name>/."""
     root = await checkout(workspace)
-    code, output = await run_sandboxed(root, ["node", "--test", "tests/"])
+    code, output = await run_test_suite(root)
     status = "PASSED" if code == 0 else f"FAILED (exit {code})"
     return f"Tests {status}\n\n{output}"
 
@@ -233,12 +236,23 @@ async def _git(cwd: Path, *args: str) -> str:
 # -- Running agent-written code ------------------------------------------------------------
 
 
+async def run_test_suite(root: Path) -> tuple[int, str]:
+    """`npm install` when package.json declares dependencies, then `node --test tests/`."""
+    manifest = root / "package.json"
+    if manifest.exists() and json.loads(manifest.read_text()).get("dependencies"):
+        code, output = await run_sandboxed(root, ["npm", "install", "--no-audit", "--no-fund", "--ignore-scripts"])
+        if code != 0:
+            return code, f"npm install failed:\n{output}"
+    return await run_sandboxed(root, ["node", "--test", "tests/"])
+
+
 async def run_sandboxed(root: Path, argv: list[str]) -> tuple[int, str]:
     """Run a command over agent-written code with no credentials in its environment.
 
     This is a demo-grade boundary: a clean environment (no API keys, no GitHub token), a
     throwaway HOME, the checkout as the working directory and a timeout. A production system
-    would run it in an isolated sandbox (a container or microVM with no network).
+    would run it in an isolated sandbox (a container or microVM with network access limited to
+    the package registry).
     """
     home = tempfile.mkdtemp(prefix="agent-home-")
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": home, "NODE_OPTIONS": "", "CI": "1"}

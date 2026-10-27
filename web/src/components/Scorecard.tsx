@@ -6,7 +6,7 @@ import { CRITERIA } from "../story";
 
 export interface Evidence { proof: Proof; runId: string; workflowId: string; temporalRunId?: string }
 
-/** Every proof across this session's runs, plus D5, which spans runs: a run that finished on
+/** Every proof across this copy's runs, plus D5, which spans runs: a run that finished on
  *  the old pipeline version after a run on the new version had started. */
 export function collectEvidence(runs: (RunSummary & { proofs?: Proof[] })[]): Map<Criterion, Evidence> {
   const found = new Map<Criterion, Evidence>();

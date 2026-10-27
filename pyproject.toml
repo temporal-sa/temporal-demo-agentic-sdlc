@@ -16,7 +16,6 @@ dependencies = [
     "httpx>=0.28",
     "redis>=6.4",
     "pyyaml>=6.0",
-    "itsdangerous>=2.2",
 ]
 
 [dependency-groups]

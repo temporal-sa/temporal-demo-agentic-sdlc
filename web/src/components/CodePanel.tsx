@@ -1,20 +1,38 @@
-// The pipeline Workflow's own source, with the line the run is on highlighted. Shows run()
-// (the whole lifecycle) and, below it, the method behind the active step.
+// The run Workflow's own source, with the line the run is on highlighted. Shows run() (the
+// whole lifecycle) and, below it, the method behind the active step: from the run's own file, or
+// from base.py for what all three kinds of run share.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { RunKind } from "../api";
 
-const CALL_FOR_STEP: Record<string, string> = {
-  issue: "_open_issue", plan: "_plan", "gate:plan": "_plan", build: "_build", pr: "_open_pull_request",
-  review: "_review", security: "_review", "gate:merge": "_merge", merge: "_merge", staging: "_deploy_to_staging",
-  "gate:production": "_gate(\"production\"", canary: "_canary", rollback: "_canary", done: "_finish",
-  "gate:budget": "_turn",
+const FILE: Record<RunKind, string> = { issue: "pipeline/workflow.py", dependency: "pipeline/dependency.py", review: "pipeline/review.py" };
+
+// For each step: the call in run() to highlight, and the method to show below it.
+const STEPS: Record<RunKind, Record<string, [call: string, method: string]>> = {
+  issue: {
+    issue: ["_take_issue", "_take_issue"], clarify: ["_clarify", "_clarify"], "gate:clarify": ["_clarify", "_wait_for_people"],
+    plan: ["_plan", "_plan"], "gate:plan": ["_plan", "_wait_for_people"], build: ["_build", "_build"],
+    pr: ["_open_pull_request", "_open_pull_request"], review: ["_review(", "_review"], security: ["_review(", "_review"],
+    "gate:merge": ["_review_window", "_review_window"], feedback: ["_review_window", "_address_feedback"], merge: ["_merge", "_merge"],
+    staging: ["_deploy_to_staging", "_deploy_to_staging"], "gate:production": ["_ask_to_ship", "_ask_to_ship"],
+    canary: ["_canary", "_canary"], rollback: ["_canary", "_roll_back"], done: ["_finish", "_finish"], "gate:budget": ["", "_ensure_budget"],
+  },
+  dependency: {
+    pr: ["_take_pull_request", "_take_pull_request"], tests: ["_test_the_bump", "_test_the_bump"], diagnose: ["_diagnose", "_diagnose"],
+    fix: ["_fix", "_fix"], explain: ["_explain", "_explain"], review: ["_review(", "_review"],
+    "gate:conversation": ["_converse_on_pr", "_converse_on_pr"], feedback: ["_converse_on_pr", "_address_on_pr"], "gate:budget": ["", "_ensure_budget"],
+  },
+  review: {
+    pr: ["_take_pull_request", "_take_pull_request"], review: ["_review_pr", "_review_pr"],
+    "gate:conversation": ["_converse_on_pr", "_converse_on_pr"], feedback: ["_converse_on_pr", "_address_on_pr"], "gate:budget": ["", "_ensure_budget"],
+  },
 };
 
-const METHOD_FOR_STEP: Record<string, string> = {
-  issue: "_open_issue", plan: "_plan", "gate:plan": "_gate", build: "_build", pr: "_open_pull_request",
-  review: "_review", security: "_review", "gate:merge": "_gate", merge: "_merge", staging: "_deploy_to_staging",
-  "gate:production": "_gate", canary: "_canary", rollback: "_roll_back", done: "_finish", "gate:budget": "_ensure_budget",
-};
+function stepCode(kind: RunKind, step: string | null): [string, string] | undefined {
+  if (!step) return undefined;
+  if (step.startsWith("code:")) return ["_build", "_code_subtask"];  // a coding agent's lane
+  return STEPS[kind][step];
+}
 
 function extract(source: string, name: string): { start: number; lines: string[] } | null {
   const all = source.split("\n");
@@ -40,14 +58,21 @@ function highlight(line: string): string {
     .replace(/\u0000s(.*?)\u0001/g, '<span class="s">$1</span>') + comment;
 }
 
-export function CodePanel({ activeStep, status }: { activeStep: string | null; status: string }) {
+export function CodePanel({ kind, activeStep, status }: { kind: RunKind; activeStep: string | null; status: string }) {
   const [source, setSource] = useState<string>("");
+  const [shared, setShared] = useState<string>("");
   const methodRef = useRef<HTMLPreElement>(null);
-  useEffect(() => { fetch("/api/source/pipeline").then((r) => r.text()).then(setSource).catch(() => setSource("")); }, []);
+  useEffect(() => { fetch(`/api/source/${kind}`).then((r) => r.text()).then(setSource).catch(() => setSource("")); }, [kind]);
+  useEffect(() => { fetch("/api/source/base").then((r) => r.text()).then(setShared).catch(() => setShared("")); }, []);
 
+  const code = stepCode(kind, activeStep);
   const run = useMemo(() => (source ? extract(source, "run") : null), [source]);
-  const method = useMemo(() => (source && activeStep ? extract(source, METHOD_FOR_STEP[activeStep] ?? "") : null), [source, activeStep]);
-  const call = activeStep ? CALL_FOR_STEP[activeStep] : undefined;
+  const method = useMemo(() => {
+    if (!code?.[1]) return null;
+    const own = source ? extract(source, code[1]) : null;
+    return own ? { ...own, file: FILE[kind] } : shared ? { ...extract(shared, code[1]), file: "pipeline/base.py" } : null;
+  }, [source, shared, code, kind]);
+  const call = code?.[0];
 
   useEffect(() => { methodRef.current?.scrollTo({ top: 0 }); }, [activeStep]);
 
@@ -55,7 +80,7 @@ export function CodePanel({ activeStep, status }: { activeStep: string | null; s
   return (
     <div className="code-panel">
       <div className="code-caption">
-        <span className="mono">pipeline/workflow.py</span>
+        <span className="mono">{FILE[kind]}</span>
         <span className="muted">The whole lifecycle is one Workflow method</span>
       </div>
       <pre className="codeview compact" data-status={status} style={{ counterReset: `line ${run.start - 1}` }}>
@@ -64,12 +89,12 @@ export function CodePanel({ activeStep, status }: { activeStep: string | null; s
             dangerouslySetInnerHTML={{ __html: highlight(line) || " " }} />
         ))}
       </pre>
-      {method && (
+      {method?.lines && (
         <>
-          <div className="code-caption"><span className="mono">{METHOD_FOR_STEP[activeStep ?? ""]}()</span><span className="muted">The step running now</span></div>
-          <pre className="codeview method" ref={methodRef} style={{ counterReset: `line ${method.start - 1}` }}>
+          <div className="code-caption"><span className="mono">{code?.[1]}()</span><span className="muted">The step running now · {method.file}</span></div>
+          <pre className="codeview method" ref={methodRef} style={{ counterReset: `line ${(method.start ?? 1) - 1}` }}>
             {method.lines.map((line, i) => (
-              <span key={i} className="ln" data-ln={method.start + i} dangerouslySetInnerHTML={{ __html: highlight(line) || " " }} />
+              <span key={i} className="ln" data-ln={(method.start ?? 1) + i} dangerouslySetInnerHTML={{ __html: highlight(line) || " " }} />
             ))}
           </pre>
         </>

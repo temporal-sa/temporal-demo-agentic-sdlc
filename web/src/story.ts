@@ -69,7 +69,7 @@ export const CRITERIA: CriterionInfo[] = [
       text: "Even a well prompted agent may go off the rails and crash, fail to produce any changes, hang/freeze, or otherwise fail to complete, and need to be retried.",
       source: SOURCES.duolingo,
     },
-    beat: "Kill the worker mid-turn. The agent continues on a new worker from its last completed step.",
+    beat: "Kill the worker while an agent fixes a broken upgrade. It continues on a new worker from its last completed step.",
     temporal: "Model and tool calls are Activities; Event History keeps the ones that finished",
   },
   {
@@ -77,15 +77,15 @@ export const CRITERIA: CriterionInfo[] = [
     title: "Humans stay accountable without babysitting",
     problem: "Approvals take hours. A script holding a process open for a reviewer is a process waiting to crash.",
     quote: { text: "A deploy agent might run free in staging but need approval in production, or run on its own at noon but check with a human at 3 a.m.", source: SOURCES.port },
-    beat: "The run waits at plan approval and the production gate, for minutes or days, using no compute.",
-    temporal: "Durable waits answered by Updates",
+    beat: "The run waits for /approve and /ship on GitHub, for minutes or days, using no compute. The agent's required check holds each PR.",
+    temporal: "Durable waits answered by Signals from GitHub's webhooks",
   },
   {
     id: "D3",
     title: "Parallel agents, flaky APIs and spend stay under control",
     problem: "Four agents cost four times as much, and every provider and API rate limits you.",
     quote: { text: "Four agents in parallel is four times the burn.", source: SOURCES.kanbots },
-    beat: "Coding agents run in parallel. One is rate limited and retries while the others keep going. The run stops at its budget.",
+    beat: "Coding agents run in parallel. One is rate limited and retries while the others keep going. The run stops at its budget until someone replies /continue.",
     temporal: "Child Workflows, Retry Policies, and a budget the Workflow enforces",
   },
   {
@@ -108,8 +108,15 @@ export const CRITERIA: CriterionInfo[] = [
     title: "Every agent action is auditable",
     problem: "Agent sprawl, inherited credentials, no record of which agent did what.",
     quote: { text: "What you get is agent sprawl: agents taking destructive actions with no audit trail, no respect for PII, and no scoped credentials.", source: SOURCES.port },
-    beat: "Open the run in Temporal: every model call, tool call, approval and retry, in order.",
+    beat: "Open a dependency repair in Temporal: the diagnosis, every model and tool call, the fix, the PR rewrite and the review, in order.",
     temporal: "Event History",
+  },
+  {
+    id: "D7",
+    title: "People can steer agents mid-flight without starting over",
+    problem: "An approve-or-reject button makes a person a gatekeeper. Developers need to redirect agents where they already work, and a new requirement mustn't mean starting from scratch.",
+    beat: "Answer the planner on the issue, steer the coders with an issue comment while they work, comment on the PR. Feedback is fixed on the spot; a new requirement sends the run back to planning.",
+    temporal: "Signals from GitHub's webhooks; the Workflow routes each comment to the right agent",
   },
 ];
 
@@ -119,5 +126,6 @@ export const RECAP = [
   "Agents worked in parallel and retried through rate limits, inside a budget the Workflow enforces.",
   "A bad canary was rolled back and reported without anyone paging in.",
   "The pipeline itself changed while work was in flight.",
+  "Developers steered the agents in GitHub comments, and nobody had to start over.",
   "Every step is on the record.",
 ];

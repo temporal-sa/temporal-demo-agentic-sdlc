@@ -3,7 +3,7 @@
 // pause polling while the tab is hidden, and say how fresh the data is.
 
 import { useEffect, useReducer, useRef, useState } from "react";
-import { api, type AgentEvent, type RunView, type SessionView } from "./api";
+import { api, type AgentEvent, type RunView, type Overview } from "./api";
 
 export interface ToolCall { id: string; name: string; input: string; status: "running" | "done" | "error" | "awaiting"; result?: string; at: number }
 export interface AgentFeed {
@@ -143,7 +143,7 @@ export function usePoll<T>(path: string, intervalMs: number, deps: unknown[] = [
   return { data, refresh: () => setTick((t) => t + 1) };
 }
 
-export type { SessionView };
+export type { Overview };
 
 export function useNow(intervalMs = 1000): number {
   const [now, setNow] = useState(() => Date.now() / 1000);

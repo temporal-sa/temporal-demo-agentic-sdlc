@@ -319,13 +319,14 @@ Thursday night she goes home. What do you think she finds on Friday morning?
         ("04", "A change that passed review broke checkout in production.", "Nobody noticed until customers did."),
         ("05", "Someone changed the agent prompts at midnight.", "Runs already in flight picked them up halfway."),
         ("06", "“Which agent did this?”", "No record of what each agent did, or why."),
+        ("07", "Maya's review comment on the PR went unanswered.", "The only choices were merge it or start over."),
     ]
     for i, (n, what, cost) in enumerate(rows):
-        y = int((1.3 + i * 0.6) * IN)
-        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.5 * IN), fill=CARD, edge=None)
-        d.box(s, int(0.45 * IN), y, int(0.05 * IN), int(0.5 * IN), fill=YELLOW, edge=None)
-        d.text(s, int(0.65 * IN), y, int(0.5 * IN), int(0.5 * IN), n, size=14, color=YELLOW, bold=True, anchor=MSO_ANCHOR.MIDDLE)
-        d.text(s, int(1.2 * IN), y + int(0.06 * IN), int(7.7 * IN), int(0.42 * IN),
+        y = int((1.25 + i * 0.53) * IN)
+        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.45 * IN), fill=CARD, edge=None)
+        d.box(s, int(0.45 * IN), y, int(0.05 * IN), int(0.45 * IN), fill=YELLOW, edge=None)
+        d.text(s, int(0.65 * IN), y, int(0.5 * IN), int(0.45 * IN), n, size=14, color=YELLOW, bold=True, anchor=MSO_ANCHOR.MIDDLE)
+        d.text(s, int(1.2 * IN), y + int(0.03 * IN), int(7.7 * IN), int(0.42 * IN),
                [[(what + " ", {"bold": True, "size": 11}), (cost, {"size": 11, "color": INDIGO})]], anchor=MSO_ANCHOR.MIDDLE)
     d.notes(s, """
 Every kind of failure happened once.
@@ -333,6 +334,7 @@ The agent on the biggest issue crashed at two in the morning. The cron job retri
 The plan approval sat in Slack for six hours; the script waiting for it timed out.
 Four agents hit a rate limit together. Four times the burn, and all of them stalled.
 A change that passed review broke checkout in production.
+And when Maya left a comment on a PR, nothing read it. Her only choices were to merge it anyway or throw the work away and start again.
 Someone changed the prompts at midnight, and runs in flight picked it up halfway.
 And on Friday morning, nobody could say which agent did what.
 These aren't AI problems. They're distributed systems problems.
@@ -368,10 +370,10 @@ So let the agents decide inside a step, and let Temporal run the process.
     d.label_box(s, int(0.5 * IN), int(2.1 * IN), int(1.4 * IN), int(0.7 * IN), "GITHUB\nISSUE", edge=GREEN)
     wf = d.box(s, int(2.3 * IN), int(1.35 * IN), int(5.0 * IN), int(2.95 * IN), fill=RGBColor(0x1A, 0x18, 0x30), edge=UV, width=1.5)
     d.text(s, int(2.45 * IN), int(1.42 * IN), int(4.8 * IN), int(0.3 * IN), "IssueToProduction Workflow", size=10, color=INDIGO, font=MONO)
-    steps = [("PLANNER\nAGENT", 2.5, 1.95, PURPLE, MSO_SHAPE.OVAL), ("◆ APPROVE\nPLAN", 3.75, 1.95, YELLOW, MSO_SHAPE.DIAMOND),
+    steps = [("PLANNER\nAGENT", 2.5, 1.95, PURPLE, MSO_SHAPE.OVAL), ("◆ /approve", 3.75, 1.95, YELLOW, MSO_SHAPE.DIAMOND),
              ("CODER", 5.0, 1.75, PURPLE, MSO_SHAPE.OVAL), ("CODER", 5.0, 2.45, PURPLE, MSO_SHAPE.OVAL),
              ("REVIEW\nAGENT", 6.15, 1.95, PURPLE, MSO_SHAPE.OVAL),
-             ("STAGING", 2.5, 3.2, CYAN, MSO_SHAPE.RECTANGLE), ("◆ APPROVE\nPROD", 3.75, 3.2, YELLOW, MSO_SHAPE.DIAMOND),
+             ("STAGING", 2.5, 3.2, CYAN, MSO_SHAPE.RECTANGLE), ("◆ /ship", 3.75, 3.2, YELLOW, MSO_SHAPE.DIAMOND),
              ("CANARY", 5.0, 3.2, CYAN, MSO_SHAPE.RECTANGLE), ("ROLLBACK\nSAGA", 6.15, 3.2, CYAN, MSO_SHAPE.RECTANGLE)]
     for label, x, y, color, shape in steps:
         d.label_box(s, int(x * IN), int(y * IN), int(1.0 * IN), int(0.62 * IN), label, edge=color, size=7, shape=shape)
@@ -383,36 +385,37 @@ So let the agents decide inside a step, and let Temporal run the process.
     d.arrow(s, int(7.3 * IN), int(2.6 * IN), int(7.7 * IN), int(2.6 * IN))
     d.arrow(s, int(7.3 * IN), int(3.4 * IN), int(7.7 * IN), int(3.4 * IN))
     d.text(s, int(0.5 * IN), int(4.45 * IN), int(8.6 * IN), int(0.5 * IN),
-           [[("● agent Workflow   ", {"color": PURPLE, "font": MONO, "size": 9}), ("◆ a person, through an Update   ", {"color": YELLOW, "font": MONO, "size": 9}),
+           [[("● agent Workflow   ", {"color": PURPLE, "font": MONO, "size": 9}), ("◆ a person, replying on GitHub   ", {"color": YELLOW, "font": MONO, "size": 9}),
              ("■ Activity with a Retry Policy", {"color": CYAN, "font": MONO, "size": 9})]])
     d.notes(s, """
 Here's the same pipeline on Temporal. The whole thing is one Workflow, and every agent is a Workflow of its own, a child.
 Every model call and every tool call is an Activity, so it's retried for you and recorded when it finishes.
-The diamonds are people, answering through Workflow Updates, and they can take as long as they like.
+The diamonds are people, replying on the issue or the PR. GitHub's webhook delivers each reply to the Workflow as a Signal, and they can take as long as they like.
 The job queue, the state table, the cron job and the Slack bot are gone. That's Temporal.
 """)
 
     # 12. Decision criteria
     s = d.slide()
-    d.headline(s, "Six things to prove before agents ship your code.")
+    d.headline(s, "Seven things to prove before agents ship your code.")
     criteria = [
-        ("D1", "An agent crash loses no work and re-spends no tokens", "Kill the worker mid-turn"),
-        ("D2", "Humans stay accountable without babysitting", "Approve the plan and the release"),
+        ("D1", "An agent crash loses no work and re-spends no tokens", "Kill the worker mid-fix"),
+        ("D2", "Humans stay accountable without babysitting", "/approve and /ship on GitHub"),
         ("D3", "Parallel agents, flaky APIs and spend stay under control", "Rate-limit one agent; hit the budget"),
         ("D4", "A bad change in production is caught and undone", "Break the canary"),
         ("D5", "The pipeline can change while runs are in flight", "Roll out v2 mid-run"),
-        ("D6", "Every agent action is auditable", "Open the Event History"),
+        ("D6", "Every agent action is auditable", "Replay a dependency repair"),
+        ("D7", "People can steer agents without starting over", "Comment on the issue or PR"),
     ]
     d.text(s, int(1.15 * IN), int(1.25 * IN), int(5 * IN), int(0.3 * IN), "What you need proven", size=9, color=MUTED, font=MONO)
     d.text(s, int(6.3 * IN), int(1.25 * IN), int(3 * IN), int(0.3 * IN), "What you'll see live", size=9, color=MUTED, font=MONO)
     for i, (cid, need, see) in enumerate(criteria):
-        y = int((1.55 + i * 0.55) * IN)
-        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.47 * IN), fill=CARD, edge=None)
-        d.text(s, int(0.6 * IN), y, int(0.5 * IN), int(0.47 * IN), cid, size=11, color=K_KEYWORD, font=MONO, anchor=MSO_ANCHOR.MIDDLE)
-        d.text(s, int(1.15 * IN), y, int(5.0 * IN), int(0.47 * IN), need, size=12, anchor=MSO_ANCHOR.MIDDLE, light=True)
-        d.text(s, int(6.3 * IN), y, int(2.7 * IN), int(0.47 * IN), see, size=11, color=INDIGO, anchor=MSO_ANCHOR.MIDDLE)
+        y = int((1.5 + i * 0.5) * IN)
+        d.box(s, int(0.45 * IN), y, int(8.6 * IN), int(0.43 * IN), fill=CARD, edge=None)
+        d.text(s, int(0.6 * IN), y, int(0.5 * IN), int(0.43 * IN), cid, size=11, color=K_KEYWORD, font=MONO, anchor=MSO_ANCHOR.MIDDLE)
+        d.text(s, int(1.15 * IN), y, int(5.0 * IN), int(0.43 * IN), need, size=12, anchor=MSO_ANCHOR.MIDDLE, light=True)
+        d.text(s, int(6.3 * IN), y, int(2.7 * IN), int(0.43 * IN), see, size=11, color=INDIGO, anchor=MSO_ANCHOR.MIDDLE)
     d.notes(s, """
-So let's be specific. If you were going to let agents ship your software, these are the six things you'd want proven. Each one is one of Maya's failures.
+So let's be specific. If you were going to let agents ship your software, these are the seven things you'd want proven. Each one is one of Maya's failures.
 I'll show every one of them live, and the console keeps score: a criterion only ticks when the system recorded the evidence.
 """)
 
@@ -421,27 +424,53 @@ I'll show every one of them live, and the console keeps score: a criterion only 
     d.box(s, int(3.0 * IN), int(2.05 * IN), int(4.0 * IN), int(1.05 * IN), fill=RGBColor(0x14, 0x14, 0x14), edge=GREEN, shape=MSO_SHAPE.ROUNDED_RECTANGLE, width=1.5)
     d.text(s, int(3.0 * IN), int(2.05 * IN), int(4.0 * IN), int(1.05 * IN), "Demo time", size=32, bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
     d.notes(s, """
-Do: switch to the console, press 4, click New run, pick the discount code issue, Start the run.
-Watch the graph across the top: that's the Workflow. Circles are agents, diamonds are people, squares are the system.
-Do: when it stops at Approve plan, read the plan out, then click Approve.
-Do: while the two coders are working, click Kill the worker. Point at the yellow banner. Click Start a worker.
-Watch the coder cards pick up where they stopped; the token count doesn't reset.
-Do: click Inject 429 on one coder. Watch that lane turn pink and retry while the other keeps going.
-Do: at Approve prod, open staging, then Approve. While the canary bakes, click Break the canary.
+Do: switch to the console, press 4, click Start a scenario, choose "Dependency bump that breaks the build". When the branch is ready, click Open the pull request on GitHub, then Create pull request. Show the agent's Required check pending.
+Watch the run appear from the webhook; the tests fail, the coding agent diagnoses why from the changelog.
+Do: while it fixes the code, kill the worker. Point at the yellow banner. Start it again; the agent carries on. Optionally Inject 429 on its card.
+Do: show the PR: the diagnosis comment, the agent's commit on the bump branch, the rewritten description, the review, the green check, the locked merge button.
+Do: Start a scenario, "A PR for the agent to review". Show the inline review. Reply "Please fix the rounding" on the PR; watch it in the Conversation tab, fixed and re-reviewed.
+Do: Start a scenario, an open-ended issue ("Let customers save items for later"). Answer the planner on the issue, reply /approve.
+Do: while the coders work, comment on the issue to steer them; watch it become their next turn.
+Do: at the review window, comment on the PR. At staging, open it, then reply /ship on the issue. While the canary bakes, click Break the canary.
 Watch the rollback branch appear, the revert PR open, and the issue reopen.
-Do: press 5, Roll out v2 during a second run. Then press 6 for the scorecard.
+Do: press 5, Roll out v2 during a second issue run. Then press 6 for the scorecard.
+""")
+
+    # The headline scenario: a broken dependency bump, repaired and explained on the PR
+    s = d.slide()
+    d.headline(s, "A broken bump, fixed and explained by an agent.")
+    flow = [("BUMP PR\nfrom an Action's branch", GREEN, MSO_SHAPE.RECTANGLE), ("TESTS\nfail", CYAN, MSO_SHAPE.RECTANGLE),
+            ("DIAGNOSE\nfailures + changelog", PURPLE, MSO_SHAPE.OVAL), ("FIX\non the bump branch", PURPLE, MSO_SHAPE.OVAL),
+            ("EXPLAIN\nrewrite the PR", CYAN, MSO_SHAPE.RECTANGLE), ("REVIEW\nsecond model", PURPLE, MSO_SHAPE.OVAL),
+            ("✓ READY\nTO MERGE", GREEN, MSO_SHAPE.RECTANGLE)]
+    for i, (label, color, shape) in enumerate(flow):
+        x = 0.45 + i * 1.3
+        d.label_box(s, int(x * IN), int(1.7 * IN), int(1.12 * IN), int(0.8 * IN), label, edge=color, size=7, shape=shape)
+        if i:
+            d.arrow(s, int((x - 0.18) * IN), int(2.1 * IN), int(x * IN), int(2.1 * IN))
+    d.text(s, int(0.45 * IN), int(2.85 * IN), int(8.6 * IN), int(1.2 * IN), [
+        [("The agent's required check stays pending until it's done. ", {"size": 12}),
+         ("The PR ends up explaining what changed in the dependency, what broke, what we changed and why, and how to verify.", {"size": 12, "color": INDIGO})],
+    ])
+    d.text(s, int(0.45 * IN), int(4.1 * IN), int(8.6 * IN), int(0.5 * IN),
+           "One Workflow per PR, started by GitHub's webhook · each agent a child Workflow · each model and tool call an Activity",
+           size=9, color=MUTED, font=MONO)
+    d.notes(s, """
+This is the everyday version of agentic SDLC. Dependabot tells you a bump is available; when it breaks the build, the PR sits red until someone has time.
+Here GitHub's webhook starts a Workflow for the PR. It runs the tests. They fail, so a coding agent works out why from the failures and the package's changelog before touching anything, fixes our code on the bump branch until the tests pass, and rewrites the PR so the human who merges it knows exactly what happened. A second model reviews it.
+The agent's check is required, so nobody merges the upgrade while the agents are still on it. And if the worker dies mid-fix, nothing is lost.
 """)
 
     # 14–19. One slide per beat: the behaviour first, then the feature
     beats = [
         ("D1", "A crashed worker cost seconds, not the agent's work.", "d1-agents.jpg",
-         "We killed the worker while two coding agents were mid-turn. A new worker picked them up from their last completed step. Every edit was already pushed to its branch.",
+         "We killed the worker while a coding agent was fixing a broken upgrade. A new worker picked it up from its last completed step. Every edit was already pushed to the PR branch.",
          "Activities with heartbeats · Event History · a retried Activity re-attaches to the same agent turn",
          "Each model call and tool call is an Activity, so the ones that finished are in the agent's Event History and never run twice. That's the difference between a crash costing seconds and costing the whole task."),
         ("D2", "People approved the plan and the release, on their own schedule.", "d2-gate.jpg",
-         "The run waited at two gates. No process held it open: it cost nothing and would have survived a restart or a deploy, for minutes or for days.",
-         "Durable waits · Workflow Updates with a validator",
-         "A person answers through a Workflow Update, which returns the new state in the same call and rejects a stale click. Waiting is free, so you put the gate where accountability belongs, not where it's cheap."),
+         "The run waited for /approve and /ship on the issue, and the agent's required check held each PR. No process held the waits open: they cost nothing and would have survived a restart or a deploy, for minutes or for days.",
+         "Durable waits · Signals from GitHub webhooks · a required commit status",
+         "A reply on GitHub reaches the Workflow as a Signal; nothing polls. Waiting is free, so you put the gate where accountability belongs, not where it's cheap."),
         ("D3", "Agents worked in parallel and retried through rate limits.", "d3-lanes.jpg",
          "Two coding agents built on separate branches at once. One was rate limited and retried while the other kept working. A per-run budget pauses the run for a person when spend reaches it.",
          "Child Workflows · Retry Policies (incl. Retry-After) · a budget the Workflow enforces",
@@ -458,6 +487,10 @@ Do: press 5, Roll out v2 during a second run. Then press 6 for the scorecard.
          "Every model call, tool call, approval, retry and compensation is in Event History, in order, with inputs and outputs.",
          "Event History",
          "That's the audit trail Maya didn't have on Friday morning, and nobody had to build it."),
+        ("D7", "Developers steered the agents, and nobody started over.", "d7-conversation.jpg",
+         "The planner asked questions on the issue. A comment on the issue reached the coders mid-task. Comments on PRs were fixed and re-reviewed; a new requirement sent the run back to planning.",
+         "Signals from GitHub webhooks · the Workflow routes each comment to the right agent",
+         "People aren't just approvers here. They answer the planner, steer the coders, and comment on PRs, all on GitHub where they already work. Feedback gets fixed on the spot; a new requirement voids the plan approval and goes back through planning, and nothing that already happened is lost."),
     ]
     for cid, claim, img, what, feature, note in beats:
         s = d.slide()
@@ -546,17 +579,18 @@ What isn't here is just as important: no job queue, no state table, no retry loo
         "Agents worked in parallel and retried through rate limits, inside a budget.",
         "A bad canary was rolled back and reported without anyone paging in.",
         "The pipeline changed while work was in flight.",
+        "Developers steered the agents from GitHub, and nobody started over.",
         "Every step is on the record.",
     ]
     for i, line in enumerate(recap):
-        y = int((1.35 + i * 0.52) * IN)
+        y = int((1.3 + i * 0.46) * IN)
         d.text(s, int(0.5 * IN), y, int(0.5 * IN), int(0.45 * IN), str(i + 1), size=18, color=GREEN, light=True)
         d.text(s, int(1.0 * IN), y + int(0.05 * IN), int(8.0 * IN), int(0.45 * IN), line, size=15, light=True)
     d.text(s, int(0.5 * IN), int(4.55 * IN), int(8.6 * IN), int(0.4 * IN),
            "Replace “storefront issue” with your migration backlog, your dependency upgrades, your incident follow-ups.", size=11, color=INDIGO)
     d.notes(s, """
 So here's Maya's Friday morning with Temporal underneath.
-Read the six lines.
+Read the seven lines.
 And replace storefront issue with whatever you'd give agents first: a migration backlog, dependency upgrades, incident follow-ups. The shape is the same.
 """)
 

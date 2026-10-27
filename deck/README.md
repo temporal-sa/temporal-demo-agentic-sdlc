@@ -1,6 +1,6 @@
 # Deck
 
-`build_deck.py` writes the story-driven deck that goes with the demo, 24 slides with speaker notes:
+`build_deck.py` writes the story-driven deck that goes with the demo, 26 slides with speaker notes:
 
 ```bash
 uv run python deck/build_deck.py --render   # deck/out/agentic-sdlc.pptx, plus a PNG per slide for review

@@ -11,23 +11,24 @@ const LANE_GAP = 40;
 type Kind = "agent" | "person" | "system";
 
 const KIND: Record<string, Kind> = {
-  issue: "system", plan: "agent", "gate:plan": "person", build: "system", pr: "system", review: "agent",
+  issue: "system", clarify: "agent", "gate:clarify": "person", plan: "agent", "gate:plan": "person", feedback: "agent", build: "system", pr: "system", review: "agent",
   security: "agent", "gate:merge": "person", merge: "system", staging: "system", "gate:production": "person",
   canary: "system", rollback: "system", "gate:budget": "person", done: "system",
+  tests: "system", diagnose: "agent", fix: "agent", explain: "system", "gate:conversation": "person",
 };
 
 const SHORT: Record<string, string> = {
-  issue: "Issue", plan: "Plan", "gate:plan": "Approve plan", build: "Fork", pr: "Pull request",
-  review: "Review", security: "Security", "gate:merge": "Approve merge", merge: "Merge", staging: "Staging",
-  "gate:production": "Approve prod", canary: "Canary", rollback: "Roll back", "gate:budget": "Budget", done: "Report",
+  issue: "Issue", clarify: "Questions", "gate:clarify": "Answer", plan: "Plan", "gate:plan": "/approve", feedback: "Fix", build: "Fork", pr: "Pull request",
+  review: "Review", security: "Security", "gate:merge": "Comments", merge: "Merge", staging: "Staging",
+  "gate:production": "/ship", canary: "Canary", rollback: "Roll back", "gate:budget": "Budget", done: "Report",
+  tests: "Tests", diagnose: "Diagnose", fix: "Fix", explain: "Explain", "gate:conversation": "Comments",
 };
 
 export function PipelineGraph({ run, selected, onSelect, retrying }: {
   run: RunState; selected: string | null; onSelect: (key: string) => void; retrying: Set<string>;
 }) {
   const lanes = run.steps.filter((s) => s.lane && s.key.startsWith("code:"));
-  const main = run.steps.filter((s) => !s.lane && s.key !== "rollback"
-    && !(s.key === "gate:budget" && (s.status === "pending" || s.status === "skipped")));
+  const main = run.steps.filter((s) => !s.lane && s.key !== "rollback" && !hiddenUntilUsed(s));
   const rollback = run.steps.find((s) => s.key === "rollback");
   const showRollback = rollback && rollback.status !== "pending" && rollback.status !== "skipped";
 
@@ -80,14 +81,23 @@ export function PipelineGraph({ run, selected, onSelect, retrying }: {
         </g>
       )}
 
-      {main.map((s) => (
+      {main.map((s, i) => (
         <g key={s.key} data-status={status(s)} onClick={() => onSelect(s.key)} className="node-group">
           <Node kind={KIND[s.key] ?? "system"} cx={x(s.key)} cy={MAIN_Y} status={status(s)} selected={selected === s.key} />
-          <text x={x(s.key)} y={MAIN_Y - 22} textAnchor="middle" className="node-label">{SHORT[s.key] ?? s.label}</text>
+          {/* The first label starts at its node, so a long one isn't cut off at the left edge. */}
+          <text x={i === 0 ? x(s.key) - 10 : x(s.key)} y={MAIN_Y - 22} textAnchor={i === 0 ? "start" : "middle"}
+            className="node-label">{SHORT[s.key] ?? s.label}</text>
         </g>
       ))}
     </svg>
   );
+}
+
+/** Steps that only appear when the run actually takes them. */
+export function hiddenUntilUsed(s: Step): boolean {
+  const unused = s.status === "pending" || s.status === "skipped";
+  if (["gate:budget", "feedback", "rollback"].includes(s.key)) return unused;
+  return s.key === "gate:clarify" && s.status === "skipped";
 }
 
 function Node({ kind, cx, cy, status, selected }: { kind: Kind; cx: number; cy: number; status: string; selected: boolean }) {

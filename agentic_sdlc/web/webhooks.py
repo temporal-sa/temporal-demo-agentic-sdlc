@@ -1,0 +1,256 @@
+"""GitHub webhooks: which deliveries this copy of the demo acts on, and what it does with them.
+
+GitHub sends every event on the storefront repo to every webhook registered on it: the hosted
+demo's, and a laptop's `gh webhook forward` when someone develops locally. Issues and PRs carry
+a label naming the copy that owns them, so each copy acts on its own and drops the rest:
+
+- the hosted copy owns its label, crashable workspaces' labels (it starts their runs on the
+  workspace's task queue, since GitHub only reaches the hosted URL), and unlabeled items;
+- a laptop owns only its own label.
+
+``route`` turns a delivery into Actions: start a run, Signal the runs watching an issue or PR, or
+nothing. ``handle`` carries them out against Temporal.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import hmac
+import logging
+import re
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Literal
+
+from pydantic import BaseModel, Field
+from temporalio.client import Client
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+    WorkflowIDConflictPolicy,
+    WorkflowIDReusePolicy,
+)
+from temporalio.exceptions import (
+    ActivityAlreadyStartedError,
+    WorkflowAlreadyStartedError,
+)
+
+from agentic_sdlc import config
+from agentic_sdlc.activities.github import BOT_MARKER, CommentInput, HumanComment
+from agentic_sdlc.models import Autonomy, RoleModels, RunKind, RunRequest, RunState
+from agentic_sdlc.pipeline import dependency, review, workflow
+
+log = logging.getLogger(__name__)
+
+# Same key as pipeline/base.py; not imported from there to keep Workflow code out of the web server.
+GITHUB_REFS = SearchAttributeKey.for_keyword_list("AgenticSdlcGitHubRefs")
+
+WORKFLOW_FOR_KIND = {"issue": "IssueToProduction", "dependency": "DependencyRepair", "review": "PullRequestReview"}
+RUN_ID_FOR_KIND = {"issue": "issue", "dependency": "pr", "review": "review"}
+# The console shows a run's steps before a worker has published them.
+STEPS_FOR_KIND = {"issue": workflow._initial_steps, "dependency": dependency._steps, "review": review._steps}
+BUMP_TITLE = re.compile(r"^[Bb]ump \S+ from \S+ to \S+")
+# PRs from the demo's scenario branches (the bump, the sample PR) belong to whichever copy's label
+# they carry. A PR opened from GitHub's prefilled page has it when it opens; one opened through the
+# API gets it in a second call, after "opened" has fired. Either way, start once the owner is known,
+# and never treat one as an unlabeled person's PR.
+SCENARIO_BRANCHES = ("dependency-bump/", "review-sample/")
+QUEUE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+@dataclass(frozen=True)
+class StartRun:
+    kind: RunKind
+    task_queue: str
+    number: int  # the issue or PR number
+    title: str
+    body: str
+    url: str = ""  # the issue or PR on GitHub
+
+
+@dataclass(frozen=True)
+class SignalRuns:
+    ref: str  # "issue:12" or "pr:13"
+    signal: Literal["github_comment", "pull_request_closed"]
+    arg: object
+
+
+Action = StartRun | SignalRuns
+
+
+class RunSettings(BaseModel):
+    """How a copy's runs are set up, chosen in its console: each agent's model, and whether
+    merging waits for /merge."""
+
+    models: RoleModels = Field(default_factory=RoleModels)
+    autonomy: Autonomy = "auto"
+
+
+SettingsFor = Callable[[str], Awaitable[RunSettings]]  # by task queue
+
+
+def verify(secret: str, body: bytes, signature: str | None) -> bool:
+    """GitHub signs each delivery with HMAC-SHA256 of the raw body; compare in constant time."""
+    if not secret or not signature or not signature.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def owner_queue(labels: list[str]) -> str | None:
+    """The task queue whose runs should handle an item with these labels, or None if the
+    item belongs to another copy of the demo."""
+    owners = [label[len(config.OWNER_LABEL_PREFIX):] for label in labels if label.startswith(config.OWNER_LABEL_PREFIX)]
+    if config.IS_LOCAL_COPY:
+        return config.TASK_QUEUE if config.OWNER_LABEL in labels else None
+    if not owners:
+        return config.TASK_QUEUE  # unlabeled: a person on GitHub; the hosted copy takes it
+    owner = owners[0]
+    workspace_prefix = f"{config.BASE_TASK_QUEUE}-"
+    if owner == config.TASK_QUEUE or (owner.startswith(workspace_prefix) and QUEUE_NAME.fullmatch(owner)):
+        return owner
+    return None  # a laptop's, or another deployment's
+
+
+def route(event: str, payload: dict) -> list[Action]:
+    """What to do about one webhook delivery. Pure: no I/O."""
+    if payload.get("repository", {}).get("full_name") != config.GITHUB_SANDBOX_REPO:
+        return []
+    action = payload.get("action")
+
+    if event == "issues" and action in ("opened", "labeled"):
+        issue = payload["issue"]
+        labels = [label["name"] for label in issue.get("labels", [])]
+        starting = action == "opened" or payload.get("label", {}).get("name") == "agent"
+        if "agent" not in labels or not starting or _from_bot(issue.get("body")):
+            return []
+        queue = owner_queue(labels)
+        return [StartRun("issue", queue, issue["number"], issue["title"], issue.get("body") or "",
+                         issue.get("html_url", ""))] if queue else []
+
+    if event == "pull_request" and action in ("opened", "ready_for_review", "reopened", "labeled"):
+        pr = payload["pull_request"]
+        if pr.get("draft") or _from_bot(pr.get("body")):
+            return []  # the pipeline's own PRs carry the bot marker
+        labels = [label["name"] for label in pr.get("labels", [])]
+        from_scenario = pr["head"]["ref"].startswith(SCENARIO_BRANCHES)
+        owned = any(label.startswith(config.OWNER_LABEL_PREFIX) for label in labels)
+        if action == "labeled":
+            added = payload.get("label", {}).get("name", "")
+            if not (from_scenario and added.startswith(config.OWNER_LABEL_PREFIX)):
+                return []
+        elif from_scenario and not owned:
+            return []
+        queue = owner_queue(labels)
+        if queue is None:
+            return []
+        kind: RunKind = "dependency" if "dependencies" in labels or BUMP_TITLE.match(pr["title"]) else "review"
+        return [StartRun(kind, queue, pr["number"], pr["title"], pr.get("body") or "", pr.get("html_url", ""))]
+
+    if event == "pull_request" and action == "closed":
+        number = payload["pull_request"]["number"]
+        return [SignalRuns(f"pr:{number}", "pull_request_closed", number)]
+
+    comment = _comment(event, payload)
+    if comment is None:
+        return []
+    ref = f"pr:{comment.number}" if _on_pull_request(event, payload) else f"issue:{comment.number}"
+    return [SignalRuns(ref, "github_comment", comment)]
+
+
+def _comment(event: str, payload: dict) -> HumanComment | None:
+    if event == "issue_comment" and payload.get("action") == "created":
+        raw, number, kind, file = payload["comment"], payload["issue"]["number"], "issue", None
+    elif event == "pull_request_review" and payload.get("action") == "submitted":
+        raw, number, kind, file = payload["review"], payload["pull_request"]["number"], "review", None
+        if not raw.get("body"):
+            return None  # an approval or a review whose content is all inline comments
+        raw = {**raw, "created_at": raw.get("submitted_at")}
+    elif event == "pull_request_review_comment" and payload.get("action") == "created":
+        raw, number, kind, file = payload["comment"], payload["pull_request"]["number"], "review-comment", payload["comment"].get("path")
+    else:
+        return None
+    body = raw.get("body") or ""
+    if _from_bot(body):
+        return None  # checked before the body is shortened: the marker is at the end of it
+    if file:
+        body = f"(on {file}) {body}"
+    return HumanComment(id=f"{kind}:{raw['id']}", number=number, author=(raw.get("user") or {}).get("login", "someone"),
+                        body=body[:4000], url=raw.get("html_url", ""), created_at=raw.get("created_at") or "")
+
+
+def _on_pull_request(event: str, payload: dict) -> bool:
+    return event != "issue_comment" or "pull_request" in payload.get("issue", {})
+
+
+def _from_bot(body: str | None) -> bool:
+    return BOT_MARKER in (body or "")
+
+
+async def handle(temporal: Client, actions: list[Action], settings_for: SettingsFor) -> list[str]:
+    """Carry out the actions; returns what was done, for the delivery's response body."""
+    done: list[str] = []
+    for action in actions:
+        if isinstance(action, StartRun):
+            done.append(await _start(temporal, action, await settings_for(action.task_queue)))
+        else:
+            query = (f"AgenticSdlcGitHubRefs = '{action.ref}' AND ExecutionStatus = 'Running'")
+            async for execution in temporal.list_workflows(query):
+                await temporal.get_workflow_handle(execution.id).signal(action.signal, action.arg)
+                done.append(f"signalled {execution.id}")
+    return done
+
+
+async def _start(temporal: Client, start: StartRun, settings: RunSettings) -> str:
+    prefix = f"{start.task_queue}.gh."
+    running = [w async for w in temporal.list_workflows(
+        f"WorkflowId STARTS_WITH '{prefix}' AND ExecutionStatus = 'Running' AND "
+        "WorkflowType IN ('IssueToProduction', 'DependencyRepair', 'PullRequestReview')")]
+    run_id = f"{RUN_ID_FOR_KIND[start.kind]}-{start.number}"
+    if len(running) >= config.MAX_ACTIVE_GITHUB_RUNS and not any(w.id == prefix + run_id for w in running):
+        log.warning("not starting %s: %d runs already active", run_id, len(running))
+        # The web server holds no GitHub token: the owning copy's worker posts the comment.
+        with contextlib.suppress(ActivityAlreadyStartedError):  # a redelivery: already said so
+            await temporal.start_activity(
+                "comment_on_issue", CommentInput(repo=config.GITHUB_SANDBOX_REPO, issue_number=start.number, body=(
+                    f"This demo already has {len(running)} agent runs in progress, its limit, so the agents won't pick "
+                    "this up. Close one of the others and reopen this to try again.")),
+                id=f"{prefix}busy-{run_id}", task_queue=start.task_queue,
+                start_to_close_timeout=timedelta(minutes=1),
+            )
+        return f"skipped {run_id}: {len(running)} runs already active"
+    console = config.PUBLIC_URL if start.task_queue == config.TASK_QUEUE else None
+    request = RunRequest(
+        run_id=run_id, kind=start.kind, repo=config.GITHUB_SANDBOX_REPO, title=start.title[:200], body=start.body[:4000],
+        issue_number=start.number if start.kind == "issue" else None,
+        pr_number=start.number if start.kind != "issue" else None,
+        models=settings.models, autonomy=settings.autonomy, budget_usd=config.DEFAULT_BUDGET_USD, console_url=console,
+    )
+    try:
+        await temporal.start_workflow(
+            WORKFLOW_FOR_KIND[start.kind], request, id=prefix + run_id, task_queue=start.task_queue,
+            # A run waits for people, so it can last days; this bounds an abandoned one, which
+            # would otherwise hold one of the copy's run slots forever.
+            execution_timeout=timedelta(days=3),
+            # Set from the start, so the console lists the run and comments reach it even before a
+            # worker has picked it up (say, while the presenter has the worker killed).
+            memo={"run": RunState(
+                run_id=run_id, kind=start.kind, version="", title=request.title, budget_usd=request.budget_usd,
+                started_at=time.time(), steps=STEPS_FOR_KIND[start.kind](),
+                issue_url=start.url if start.kind == "issue" else None,
+                pr_url=start.url if start.kind != "issue" else None,
+            ).model_dump(mode="json")},
+            search_attributes=TypedSearchAttributes([SearchAttributePair(
+                GITHUB_REFS, [f"{'issue' if start.kind == 'issue' else 'pr'}:{start.number}"])]),
+            # A redelivered webhook, or "labeled" after "opened", finds the run already going.
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            # ...and one redelivered after the run ended doesn't start it again.
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+    except WorkflowAlreadyStartedError:
+        return f"already done {run_id}"
+    return f"started {prefix + run_id}"
