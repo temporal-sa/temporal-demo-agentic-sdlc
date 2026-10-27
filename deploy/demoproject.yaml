@@ -10,11 +10,10 @@ spec:
     title: Agentic SDLC
     summary: >-
       Built with Python, Pydantic AI and Temporal's agent harness over Anthropic,
-      OpenAI and Gemini. Demonstrates AI agents working in GitHub, driven by its
-      webhooks: repairing a dependency bump that breaks the build, reviewing PRs
-      behind a required check, and taking an issue to production with parallel
-      coding agents, approval gates, budget limits, a canary with automatic
-      rollback, and Worker Versioning.
+      OpenAI and Gemini. Demonstrates webhook-driven agents as child Workflows,
+      approval gates in GitHub comments, budgets, canary rollback and Worker
+      Versioning. Use case: AI agents repair a breaking dependency bump, review
+      PRs and ship issues.
     tags: [AI Agents, Multi-Agent, Human-in-the-Loop]
     temporalSdks: [Python]
     aiSdks: [Pydantic AI]
