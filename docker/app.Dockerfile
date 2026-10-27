@@ -8,11 +8,12 @@ RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
-# The Python app. git and Node are for the worker: agents work in git checkouts and run the
-# storefront's node:test suite.
+# The Python app. git, Node and npm are for the worker: agents work in git checkouts, install
+# the storefront's dependencies (one is a github: URL, hence git) and run its node:test suite.
+# Debian's nodejs package doesn't include npm.
 FROM python:3.13-slim-trixie
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git nodejs ca-certificates tini \
+ && apt-get install -y --no-install-recommends git nodejs npm ca-certificates tini \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.13 /uv /usr/local/bin/uv
 WORKDIR /app
