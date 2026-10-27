@@ -156,7 +156,7 @@ def route(event: str, payload: dict) -> list[Action]:
         return [SignalRuns(f"pr:{number}", "pull_request_closed", number)]
 
     comment = _comment(event, payload)
-    if comment is None or _from_bot(comment.body):
+    if comment is None:
         return []
     ref = f"pr:{comment.number}" if _on_pull_request(event, payload) else f"issue:{comment.number}"
     return [SignalRuns(ref, "github_comment", comment)]
@@ -175,6 +175,8 @@ def _comment(event: str, payload: dict) -> HumanComment | None:
     else:
         return None
     body = raw.get("body") or ""
+    if _from_bot(body):
+        return None  # checked before the body is shortened: the marker is at the end of it
     if file:
         body = f"(on {file}) {body}"
     return HumanComment(id=f"{kind}:{raw['id']}", number=number, author=(raw.get("user") or {}).get("login", "someone"),

@@ -9,6 +9,7 @@ import { useNow } from "../live";
 import { StepList } from "../kit/StepList";
 import { CodePanel } from "./CodePanel";
 import { GraphLegend, PipelineGraph, hiddenUntilUsed } from "./PipelineGraph";
+import { Markdown } from "./Markdown";
 import { GitHubPanel, StorefrontPanel } from "./Panels";
 
 const RUN_STATUS_LABEL: Record<string, string> = {
@@ -200,7 +201,7 @@ function ConversationPanel({ view }: { view: RunView }) {
             <span className="status-text mono">{STATUS_LABEL[f.status]}</span>
             {f.url && <a href={f.url} target="_blank" rel="noreferrer" className="mono">↗</a>}
           </header>
-          <blockquote>{f.text}</blockquote>
+          <Markdown text={f.text} />
           {f.reason && <p className="muted">Triage: {f.reason}</p>}
           {f.outcome && <p className="outcome">{f.outcome}</p>}
         </li>

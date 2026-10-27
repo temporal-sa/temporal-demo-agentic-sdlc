@@ -343,7 +343,7 @@ class GitHubActivities:
     async def fetch_comments(self, input: CommentsInput) -> list[HumanComment]:
         """Comments people left on the issue or the pull request since a time: conversation
         comments, review summaries and inline review comments. The bot's own are skipped."""
-        found: list[HumanComment] = []
+        found: list[HumanComment | None] = []
         # A PR's conversation comments live on its issue, so both numbers use the issues API.
         for number in (n for n in (input.issue, input.pull) if n):
             for c in await self._get(f"/repos/{input.repo}/issues/{number}/comments?since={input.since}&per_page=100"):
@@ -354,7 +354,7 @@ class GitHubActivities:
             for r in await self._get(f"/repos/{input.repo}/pulls/{input.pull}/reviews?per_page=100"):
                 if r.get("body") and (r.get("submitted_at") or "") > input.since:
                     found.append(_human({**r, "created_at": r["submitted_at"]}, input.pull, "review"))
-        people = [c for c in found if c.body.strip() and BOT_MARKER not in c.body and c.created_at > input.since]
+        people = [c for c in found if c is not None and c.body.strip() and c.created_at > input.since]
         return sorted(people, key=lambda c: c.created_at)
 
     @activity.defn
@@ -513,8 +513,12 @@ def _bot(body: str) -> str:
     return body if BOT_MARKER in body else f"{body}\n\n{BOT_MARKER}"
 
 
-def _human(raw: dict, number: int, kind: str, *, file: str | None = None) -> HumanComment:
+def _human(raw: dict, number: int, kind: str, *, file: str | None = None) -> HumanComment | None:
+    """A person's comment, or None for the bot's own. Checked on the whole body: the marker is at
+    the end, so a long bot comment cut short would pass for a person's."""
     body = raw.get("body") or ""
+    if BOT_MARKER in body:
+        return None
     if file:
         body = f"(on {file}) {body}"
     return HumanComment(id=f"{kind}:{raw['id']}", number=number, author=(raw.get("user") or {}).get("login", "someone"),

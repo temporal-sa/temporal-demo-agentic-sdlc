@@ -217,6 +217,22 @@ def test_the_bots_own_comments_are_ignored():
     assert webhooks.route("issue_comment", comment_event(body=f"Plan\n{BOT_MARKER}")) == []
 
 
+def test_a_long_bot_comment_is_ignored_too():
+    """The marker is at the end; the body is shortened only after the check."""
+    long_plan = "### Plan\n" + "- a long acceptance criterion\n" * 400 + f"\n{BOT_MARKER}"
+    assert len(long_plan) > 4000
+    assert webhooks.route("issue_comment", comment_event(body=long_plan)) == []
+
+
+def test_the_catch_up_read_skips_long_bot_comments():
+    from agentic_sdlc.activities.github import _human
+
+    long_plan = "### Plan\n" + "- criterion\n" * 500 + f"\n{BOT_MARKER}"
+    raw = {"id": 1, "body": long_plan, "user": {"login": "maya"}, "html_url": "u", "created_at": "t"}
+    assert _human(raw, 12, "issue") is None
+    assert _human({**raw, "body": "A person's reply"}, 12, "issue").body == "A person's reply"
+
+
 def test_a_closed_pr_signals_its_runs():
     assert webhooks.route("pull_request", pr_event("closed")) == [SignalRuns("pr:13", "pull_request_closed", 13)]
 
