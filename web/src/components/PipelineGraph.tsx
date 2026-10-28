@@ -24,8 +24,8 @@ const SHORT: Record<string, string> = {
   tests: "Tests", diagnose: "Diagnose", fix: "Fix", explain: "Explain", "gate:conversation": "Comments",
 };
 
-export function PipelineGraph({ run, selected, onSelect, retrying }: {
-  run: RunState; selected: string | null; onSelect: (key: string) => void; retrying: Set<string>;
+export function PipelineGraph({ run, selected, onSelect, retrying, faulty }: {
+  run: RunState; selected: string | null; onSelect: (key: string) => void; retrying: Set<string>; faulty?: Set<string>;
 }) {
   const lanes = run.steps.filter((s) => s.lane && s.key.startsWith("code:"));
   const main = run.steps.filter((s) => !s.lane && s.key !== "rollback" && !hiddenUntilUsed(s));
@@ -41,6 +41,8 @@ export function PipelineGraph({ run, selected, onSelect, retrying }: {
   const forkX = x("build");
   const mergeX = x("pr");
   const status = (s: Step) => (retrying.has(s.key) ? "retrying" : s.status);
+  // An injected fault on a step is drawn as the same dashed outline the console uses for injected faults.
+  const broken = (s: Step) => faulty?.has(s.key) || undefined;
 
   return (
     <svg className={`pipeline-graph ${main.length > 12 ? "dense" : ""}`} viewBox={`0 0 ${W} ${height}`} role="img"
@@ -82,7 +84,7 @@ export function PipelineGraph({ run, selected, onSelect, retrying }: {
       )}
 
       {main.map((s, i) => (
-        <g key={s.key} data-status={status(s)} onClick={() => onSelect(s.key)} className="node-group">
+        <g key={s.key} data-status={status(s)} data-injected={broken(s)} onClick={() => onSelect(s.key)} className="node-group">
           <Node kind={KIND[s.key] ?? "system"} cx={x(s.key)} cy={MAIN_Y} status={status(s)} selected={selected === s.key} />
           {/* The first label starts at its node, so a long one isn't cut off at the left edge. */}
           <text x={i === 0 ? x(s.key) - 10 : x(s.key)} y={MAIN_Y - 22} textAnchor={i === 0 ? "start" : "middle"}

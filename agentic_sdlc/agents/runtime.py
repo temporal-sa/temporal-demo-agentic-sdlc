@@ -24,8 +24,10 @@ from agentic_sdlc.models import Plan, Review
 MODELS = build_registry()
 
 # One model call per Activity. Heartbeats (harness_ext.DemoModel) notice a dead worker in
-# about 10 seconds, and the call is retried on another worker. Rate limits and 5xx errors
-# retry with backoff; a rejected request (most 4xx) does not.
+# about 10 seconds, and the call is retried on another worker. Rate limits, 5xx errors and a
+# provider that is down retry with backoff (2, 4, 8, 16, then every 30 seconds) for up to half an
+# hour, so an outage ends when the provider is back and not when a retry count runs out. A
+# rejected request (most 4xx) does not retry.
 MODEL_ACTIVITY = ActivityConfig(
     start_to_close_timeout=timedelta(minutes=10),
     heartbeat_timeout=timedelta(seconds=10),
@@ -33,9 +35,9 @@ MODEL_ACTIVITY = ActivityConfig(
         initial_interval=timedelta(seconds=2),
         backoff_coefficient=2.0,
         maximum_interval=timedelta(seconds=30),
-        maximum_attempts=6,
         non_retryable_error_types=["ProviderRejected"],
     ),
+    schedule_to_close_timeout=timedelta(minutes=30),
 )
 
 

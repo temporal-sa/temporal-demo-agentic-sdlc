@@ -44,13 +44,20 @@ export interface Retry { workflow_id: string; activity: string; attempt: number;
 export interface Worker { pid: number; version: string; build_id: string | null; started_at: number }
 export interface Environments {
   staging_sha: string | null; stable_sha: string | null; canary_sha: string | null; canary_weight: number;
-  canary_fault_until: number; canary_traffic: { requests: number; errors: number };
+  canary_traffic: { requests: number; errors: number };
   history: { action: string; sha: string | null; run_id: string; at: number }[];
 }
+
+/** The session slot a browser holds: its task queue, whether its Workers are crashed, and when it expires. */
+export interface Slot { n: number; queue: string; crashed: boolean; auto_restore_at: number | null; claimed_at: number; expires_at: number }
+export interface CanaryFault { sha: string; until: number }
+/** Provider -> when its injected outage clears by itself. */
+export type Outages = Partial<Record<ModelChoice["provider"], number>>;
 
 export interface RunView {
   run: RunState; workflow_id: string; temporal_run_id: string; agent_run_ids: Record<string, string>; closed: boolean; workflow_status: string; retries: Retry[];
   faults: Record<string, string[]>; environments: Environments; workers: Worker[]; apps: string; read_at: number;
+  canary_fault: CanaryFault | null; outages: Outages;
 }
 
 export interface RunSummary {
@@ -58,15 +65,19 @@ export interface RunSummary {
   ended_at: number | null; usage: Usage; workflow_id: string; temporal_run_id: string; closed: boolean;
   issue_url: string | null; pr_url: string | null;
 }
-/** Everything this copy of the demo is running: its runs, environments and workers. */
-export interface Overview { runs: RunSummary[]; environments: Environments; workers: Worker[]; apps: string }
+/** Everything this session is running: its runs, environments and workers. Empty until it starts a scenario. */
+export interface Overview {
+  runs: RunSummary[]; environments: Environments; workers: Worker[]; apps: string | null;
+  slot: Slot | null; canary_fault?: CanaryFault | null; outages?: Outages;
+}
 
 export interface Issue { id: string; title: string; body: string }
 export type Autonomy = "auto" | "supervised";
 export interface RunSettings { models: RoleModels; autonomy: Autonomy }
 export interface Config {
-  owner_label: string; models: Record<string, string[]>; settings: RunSettings; issues: Issue[]; budget_usd: number;
+  owner_label: string | null; models: Record<string, string[]>; settings: RunSettings; issues: Issue[]; budget_usd: number;
   temporal_ui: string; repo: string; local_controls: boolean; task_queue: string;
+  slot: Slot | null; slots: number;
 }
 
 export type Criterion = "D1" | "D2" | "D3" | "D4" | "D5" | "D6" | "D7";
@@ -114,6 +125,8 @@ export function temporalLink(ui: string, workflowId: string, runId?: string | nu
 /** Retry reasons in the words the audience needs. */
 export function explainFailure(message: string): string {
   if (/heartbeat timeout/i.test(message)) return "the worker running it stopped responding";
+  if (/InjectedProviderOutage|503|unavailable/i.test(message)) return "the model provider is unavailable (503)";
+  if (/did not complete in time|WorkerShutdown/i.test(message)) return "the worker running it stopped";
   if (/start_to_close|start-to-close/i.test(message)) return "it ran past its timeout";
   return message;
 }

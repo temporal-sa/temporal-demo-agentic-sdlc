@@ -69,7 +69,7 @@ export const CRITERIA: CriterionInfo[] = [
       text: "Even a well prompted agent may go off the rails and crash, fail to produce any changes, hang/freeze, or otherwise fail to complete, and need to be retried.",
       source: SOURCES.duolingo,
     },
-    beat: "Kill the worker while an agent fixes a broken upgrade. It continues on a new worker from its last completed step.",
+    beat: "The worker crashes while an agent fixes a broken upgrade. The agent continues on a new worker from its last completed step.",
     temporal: "Model and tool calls are Activities; Event History keeps the ones that finished",
   },
   {
@@ -100,7 +100,7 @@ export const CRITERIA: CriterionInfo[] = [
     id: "D5",
     title: "The pipeline can change while runs are in flight",
     problem: "Teams change agents, prompts and stages every week. A run that started yesterday mustn't pick up today's change halfway.",
-    beat: "Roll out v2 with a security agent. Running work finishes on v1; new runs get the new stage.",
+    beat: "A v2 rollout adds a security agent. Running work finishes on v1; new runs, in every session, get the new stage.",
     temporal: "Worker Versioning with Pinned Workflows",
   },
   {
@@ -108,14 +108,14 @@ export const CRITERIA: CriterionInfo[] = [
     title: "Every agent action is auditable",
     problem: "Agent sprawl, inherited credentials, no record of which agent did what.",
     quote: { text: "What you get is agent sprawl: agents taking destructive actions with no audit trail, no respect for PII, and no scoped credentials.", source: SOURCES.port },
-    beat: "Open a dependency repair in Temporal: the diagnosis, every model and tool call, the fix, the PR rewrite and the review, in order.",
+    beat: "A dependency repair in Temporal shows the diagnosis, every model and tool call, the fix, the PR rewrite and the review, in order.",
     temporal: "Event History",
   },
   {
     id: "D7",
     title: "People can steer agents mid-flight without starting over",
     problem: "An approve-or-reject button makes a person a gatekeeper. Developers need to redirect agents where they already work, and a new requirement mustn't mean starting from scratch.",
-    beat: "Answer the planner on the issue, steer the coders with an issue comment while they work, comment on the PR. Feedback is fixed on the spot; a new requirement sends the run back to planning.",
+    beat: "People answer the planner on the issue, steer the coders with an issue comment while they work, and comment on the PR. Feedback is fixed on the spot; a new requirement sends the run back to planning.",
     temporal: "Signals from GitHub's webhooks; the Workflow routes each comment to the right agent",
   },
 ];

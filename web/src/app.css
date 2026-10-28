@@ -241,3 +241,4 @@
   .run-grid > .card { min-height: 20rem; }
   .agent-grid, .stat-grid, .problem-grid, .change-grid, .act-result, .act-proof { grid-template-columns: minmax(0, 1fr); }
 }
+.node-group[data-injected] .node { stroke: var(--pink); stroke-dasharray: 3 2; }

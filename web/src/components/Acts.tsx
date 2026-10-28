@@ -1,5 +1,5 @@
-// The story acts around the live run. Each one makes a single point the presenter can
-// leave on screen while talking, and each problem it names is one the live run resolves.
+// The story acts around the live run. Each one makes a single point that can stay
+// on screen, and each problem it names is one the live run resolves.
 
 import { ago, api, money, temporalLink, type Config, type RunSummary, type Overview } from "../api";
 import { useState } from "react";
@@ -9,7 +9,7 @@ import { Scorecard, type Evidence } from "./Scorecard";
 import { StorefrontPanel } from "./Panels";
 import type { Criterion } from "../api";
 
-export function ResultAct({ session, config, onOpenRun }: { session: Overview; config: Config; onOpenRun: (id: string) => void }) {
+export function ResultAct({ session, config, onOpenRun, onStart }: { session: Overview; config: Config; onOpenRun: (id: string) => void; onStart: () => void }) {
   const shipped = session.runs.find((r) => r.kind === "issue" && r.status === "completed");
   return (
     <div className="act act-result">
@@ -18,8 +18,9 @@ export function ResultAct({ session, config, onOpenRun }: { session: Overview; c
         <p className="lede">Temporal ran the process around them: the approvals, the retries, the canary, and the record of every step.</p>
         {shipped ? <RunCard run={shipped} config={config} onOpen={() => onOpenRun(shipped.run_id)} /> : (
           <div className="state-banner">
-            <strong>No run has shipped from this copy yet.</strong>
-            <span>Start an issue scenario before the talk (prepared issue, auto merge) so the audience sees the result first.</span>
+            <strong>No change has shipped in this session yet.</strong>
+            <span>Start an issue scenario and the finished change appears here.</span>
+            <button className="button small primary ultraviolet" onClick={onStart}>Start a scenario</button>
           </div>
         )}
       </section>
@@ -107,7 +108,7 @@ export function ChangeAct({ session, onError }: { session: Overview; config: Con
   const [busy, setBusy] = useState<string | null>(null);
   const current = versions?.current ?? null;
   const rollOut = async (buildId: "v1" | "v2") => {
-    if (!confirm(`Make ${buildId} current for this deployment? New runs from everyone using it will start on ${buildId}.`)) return;
+    if (!confirm(`Roll out ${buildId}? New runs in every session will start on ${buildId}; runs already going finish on their current version.`)) return;
     setBusy(buildId);
     try { await api("/api/versions/current", { json: { build_id: buildId } }); refresh(); }
     catch (e) { onError((e as Error).message); }

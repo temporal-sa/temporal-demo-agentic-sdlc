@@ -1,6 +1,6 @@
 // Start a scenario: do on GitHub what a person would (open an issue, run the dependency bump,
 // open a PR), labeled for this copy of the demo. The run starts when GitHub's webhook arrives.
-// For the bump, the Action pushes the branch and the presenter opens the PR from a prefilled page.
+// For the bump, the Action pushes the branch and the PR is opened from a prefilled page.
 
 import { useState } from "react";
 import { api, type Autonomy, type Config, type ModelChoice, type RoleModels, type RunKind } from "../api";
@@ -34,7 +34,7 @@ export function ScenarioDialog({ config, onClose, onStarted }: {
   const [autonomy, setAutonomy] = useState<Autonomy>(config.settings.autonomy);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const [ready, setReady] = useState<Started | null>(null);  // a bump branch, waiting for the presenter to open its PR
+  const [ready, setReady] = useState<Started | null>(null);  // a bump branch, waiting for its PR to be opened
 
   const pick = (id: string) => {
     setIssueId(id);
@@ -64,7 +64,7 @@ export function ScenarioDialog({ config, onClose, onStarted }: {
           <h2 id="open-pr-title" className="heading">The bump branch is ready. Open the PR.</h2>
           <p className="muted">
             The Dependency bump Action pushed it, Dependabot style. GitHub's "Open a pull request" page has the title,
-            description and labels filled in: click <strong>Create pull request</strong> there, as a developer would.
+            description and labels filled in: <strong>Create pull request</strong> there, as a developer would.
             GitHub's webhook then starts the agents, and the run appears here.
           </p>
           <div className="dialog-actions">
@@ -83,8 +83,7 @@ export function ScenarioDialog({ config, onClose, onStarted }: {
       <div className="dialog card" role="dialog" aria-modal="true" aria-labelledby="scenario-title" onClick={(e) => e.stopPropagation()}>
         <h2 id="scenario-title" className="heading">Start a scenario on GitHub</h2>
         <p className="muted">
-          This does what a person would do on <span className="mono">{config.repo}</span>, labeled <span className="mono">{config.owner_label}</span> so
-          only this copy of the demo picks it up. Everything after that happens on GitHub; this console only watches.
+          This does what a person would do on <span className="mono">{config.repo}</span>. Everything after that happens on GitHub; this console only watches.
         </p>
         <div className="scenario-list" role="radiogroup" aria-label="Scenario">
           {SCENARIOS.map((s) => (
@@ -108,7 +107,7 @@ export function ScenarioDialog({ config, onClose, onStarted }: {
           </>
         )}
 
-        <span className="eyebrow">Settings for this copy's runs</span>
+        <span className="eyebrow">Settings for your runs</span>
         <div className="role-models">
           {ROLES.map((role) => (
             <label key={role.key} className="field">

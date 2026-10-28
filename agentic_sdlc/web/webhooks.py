@@ -2,11 +2,16 @@
 
 GitHub sends every event on the storefront repo to every webhook registered on it: the hosted
 demo's, and a laptop's `gh webhook forward` when someone develops locally. Issues and PRs carry
-a label naming the copy that owns them, so each copy acts on its own and drops the rest:
+a label naming the session slot that owns them (``agentic-sdlc:<copy>--s03``), so each copy acts
+on its own slots' items and drops the rest:
 
-- the hosted copy owns its label, crashable workspaces' labels (it starts their runs on the
-  workspace's task queue, since GitHub only reaches the hosted URL), and unlabeled items;
-- a laptop owns only its own label.
+- the hosted copy owns its slots and crashable workspaces' slots (it starts their runs on the
+  slot's task queue, since GitHub only reaches the hosted URL);
+- a laptop owns only its own slots;
+- an item with no slot label, which a person opened on the repo directly, is nobody's.
+
+A slot's label only counts while the slot is leased, and only for items opened after the lease
+began, so a reused slot never inherits the last session's issues.
 
 ``route`` turns a delivery into Actions: start a run, Signal the runs watching an issue or PR, or
 nothing. ``handle`` carries them out against Temporal.
@@ -20,6 +25,7 @@ import hmac
 import logging
 import re
 import time
+from datetime import datetime
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -38,11 +44,14 @@ from temporalio.exceptions import (
     ActivityAlreadyStartedError,
     WorkflowAlreadyStartedError,
 )
+from temporalio.service import RPCError
 
 from agentic_sdlc import config
 from agentic_sdlc.activities.github import BOT_MARKER, CommentInput, HumanComment
 from agentic_sdlc.models import Autonomy, RoleModels, RunKind, RunRequest, RunState
 from agentic_sdlc.pipeline import dependency, review, workflow
+from agentic_sdlc.slots import Slot
+from agentic_sdlc.web import sessions
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +69,9 @@ BUMP_TITLE = re.compile(r"^[Bb]ump \S+ from \S+ to \S+")
 # and never treat one as an unlabeled person's PR.
 SCENARIO_BRANCHES = ("dependency-bump/", "review-sample/")
 QUEUE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+# GitHub stamps items to the second, and the lease to the millisecond; an item the scenario opens
+# right after the claim must not look older than it.
+LEASE_SKEW_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -70,6 +82,7 @@ class StartRun:
     title: str
     body: str
     url: str = ""  # the issue or PR on GitHub
+    created_at: str = ""  # when it was opened, as GitHub says
 
 
 @dataclass(frozen=True)
@@ -102,18 +115,23 @@ def verify(secret: str, body: bytes, signature: str | None) -> bool:
 
 
 def owner_queue(labels: list[str]) -> str | None:
-    """The task queue whose runs should handle an item with these labels, or None if the
-    item belongs to another copy of the demo."""
-    owners = [label[len(config.OWNER_LABEL_PREFIX):] for label in labels if label.startswith(config.OWNER_LABEL_PREFIX)]
-    if config.IS_LOCAL_COPY:
-        return config.TASK_QUEUE if config.OWNER_LABEL in labels else None
-    if not owners:
-        return config.TASK_QUEUE  # unlabeled: a person on GitHub; the hosted copy takes it
-    owner = owners[0]
-    workspace_prefix = f"{config.BASE_TASK_QUEUE}-"
-    if owner == config.TASK_QUEUE or (owner.startswith(workspace_prefix) and QUEUE_NAME.fullmatch(owner)):
-        return owner
-    return None  # a laptop's, or another deployment's
+    """The slot queue whose runs should handle an item with these labels, or None if the item
+    belongs to another copy of the demo, or to nobody."""
+    for label in labels:
+        if not label.startswith(config.OWNER_LABEL_PREFIX):
+            continue
+        queue = label[len(config.OWNER_LABEL_PREFIX):]
+        parsed = config.parse_slot_queue(queue)
+        if parsed is None:
+            continue
+        copy, n = parsed
+        if copy == config.TASK_QUEUE and n <= config.SESSION_SLOTS:
+            return queue
+        workspace_prefix = f"{config.BASE_TASK_QUEUE}-"
+        if (not config.IS_LOCAL_COPY and copy.startswith(workspace_prefix) and QUEUE_NAME.fullmatch(copy)
+                and n <= config.MAX_SESSION_SLOTS):
+            return queue  # a crashable workspace's slot; its runs start on the workspace's queue
+    return None  # a laptop's, another deployment's, or an item nobody owns
 
 
 def route(event: str, payload: dict) -> list[Action]:
@@ -130,7 +148,7 @@ def route(event: str, payload: dict) -> list[Action]:
             return []
         queue = owner_queue(labels)
         return [StartRun("issue", queue, issue["number"], issue["title"], issue.get("body") or "",
-                         issue.get("html_url", ""))] if queue else []
+                         issue.get("html_url", ""), issue.get("created_at", ""))] if queue else []
 
     if event == "pull_request" and action in ("opened", "ready_for_review", "reopened", "labeled"):
         pr = payload["pull_request"]
@@ -149,7 +167,8 @@ def route(event: str, payload: dict) -> list[Action]:
         if queue is None:
             return []
         kind: RunKind = "dependency" if "dependencies" in labels or BUMP_TITLE.match(pr["title"]) else "review"
-        return [StartRun(kind, queue, pr["number"], pr["title"], pr.get("body") or "", pr.get("html_url", ""))]
+        return [StartRun(kind, queue, pr["number"], pr["title"], pr.get("body") or "", pr.get("html_url", ""),
+                         pr.get("created_at", ""))]
 
     if event == "pull_request" and action == "closed":
         number = payload["pull_request"]["number"]
@@ -196,34 +215,69 @@ async def handle(temporal: Client, actions: list[Action], settings_for: Settings
     done: list[str] = []
     for action in actions:
         if isinstance(action, StartRun):
-            done.append(await _start(temporal, action, await settings_for(action.task_queue)))
+            done.append(await _start(temporal, action, settings_for))
         else:
             query = (f"AgenticSdlcGitHubRefs = '{action.ref}' AND ExecutionStatus = 'Running'")
             async for execution in temporal.list_workflows(query):
+                await _record_activity(temporal, execution.id.partition(".gh.")[0])
                 await temporal.get_workflow_handle(execution.id).signal(action.signal, action.arg)
                 done.append(f"signalled {execution.id}")
     return done
 
 
-async def _start(temporal: Client, start: StartRun, settings: RunSettings) -> str:
-    prefix = f"{start.task_queue}.gh."
-    running = [w async for w in temporal.list_workflows(
-        f"WorkflowId STARTS_WITH '{prefix}' AND ExecutionStatus = 'Running' AND "
-        "WorkflowType IN ('IssueToProduction', 'DependencyRepair', 'PullRequestReview')")]
+async def _record_activity(temporal: Client, slot_queue: str) -> None:
+    """Comments on a slot's issues and PRs are the session using the demo, so they keep its lease alive."""
+    parsed = config.parse_slot_queue(slot_queue)
+    if parsed:
+        with contextlib.suppress(RPCError):
+            await temporal.get_workflow_handle(config.slot_workflow_id(parsed[1], parsed[0])).signal(
+                Slot.github_activity, time.time())
+
+
+async def _leased_before(temporal: Client, start: StartRun) -> str | None:
+    """Why this item mustn't start a run, or None if its slot is leased and it was opened since."""
+    parsed = config.parse_slot_queue(start.task_queue)
+    state = await sessions.slot_state(temporal, parsed[1], parsed[0]) if parsed else None
+    if state is None or state.phase != "owned":
+        return "its slot isn't in use"
+    try:
+        opened = datetime.fromisoformat(start.created_at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return "it has no creation time"
+    if opened < state.claimed_at - LEASE_SKEW_SECONDS:
+        return "it was opened before the slot's current session began"
+    return None
+
+
+async def _start(temporal: Client, start: StartRun, settings_for: SettingsFor) -> str:
     run_id = f"{RUN_ID_FOR_KIND[start.kind]}-{start.number}"
-    if len(running) >= config.MAX_ACTIVE_GITHUB_RUNS and not any(w.id == prefix + run_id for w in running):
-        log.warning("not starting %s: %d runs already active", run_id, len(running))
-        # The web server holds no GitHub token: the owning copy's worker posts the comment.
+    if skipped := await _leased_before(temporal, start):
+        return f"skipped {run_id}: {skipped}"
+    await _record_activity(temporal, start.task_queue)
+    settings = await settings_for(start.task_queue)
+    copy, _ = config.parse_slot_queue(start.task_queue)
+    prefix = f"{start.task_queue}.gh."
+    running_types = "WorkflowType IN ('IssueToProduction', 'DependencyRepair', 'PullRequestReview')"
+    running = [w async for w in temporal.list_workflows(
+        f"WorkflowId STARTS_WITH '{prefix}' AND ExecutionStatus = 'Running' AND {running_types}")]
+    # Every run spends real model money, so the copy as a whole is capped too, not just each slot.
+    everywhere = [w async for w in temporal.list_workflows(
+        f"WorkflowId STARTS_WITH '{copy}--s' AND ExecutionStatus = 'Running' AND {running_types}")]
+    already = any(w.id == prefix + run_id for w in running)
+    if not already and (len(running) >= config.MAX_ACTIVE_GITHUB_RUNS or len(everywhere) >= config.MAX_ACTIVE_RUNS_ALL_SLOTS):
+        log.warning("not starting %s: %d runs already active here, %d in all", run_id, len(running), len(everywhere))
+        # The web server holds no GitHub token: the owning copy's worker posts the comment, from the
+        # copy's own queue so it works while the slot's Workers are crashed.
         with contextlib.suppress(ActivityAlreadyStartedError):  # a redelivery: already said so
             await temporal.start_activity(
                 "comment_on_issue", CommentInput(repo=config.GITHUB_SANDBOX_REPO, issue_number=start.number, body=(
-                    f"This demo already has {len(running)} agent runs in progress, its limit, so the agents won't pick "
+                    "This demo has too many agent runs in progress right now, so the agents won't pick "
                     "this up. Close one of the others and reopen this to try again.")),
-                id=f"{prefix}busy-{run_id}", task_queue=start.task_queue,
+                id=f"{prefix}busy-{run_id}", task_queue=copy,
                 start_to_close_timeout=timedelta(minutes=1),
             )
-        return f"skipped {run_id}: {len(running)} runs already active"
-    console = config.PUBLIC_URL if start.task_queue == config.TASK_QUEUE else None
+        return f"skipped {run_id}: {len(running)} runs active in the slot, {len(everywhere)} in all"
+    console = config.PUBLIC_URL if copy == config.TASK_QUEUE else None
     request = RunRequest(
         run_id=run_id, kind=start.kind, repo=config.GITHUB_SANDBOX_REPO, title=start.title[:200], body=start.body[:4000],
         issue_number=start.number if start.kind == "issue" else None,

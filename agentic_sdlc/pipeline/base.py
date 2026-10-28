@@ -319,6 +319,11 @@ class AgentRun:
         if rate_limited:
             worst = max(r.attempt for r in rate_limited)
             self._prove("D3", f"{role}: rate-limited calls retried (up to attempt {worst}) while other agents kept working")
+        down = [r for r in result.stats.retried if "503" in r.last_failure or "unavailable" in r.last_failure.lower()]
+        if down:
+            worst = max(r.attempt for r in down)
+            self._prove("D3", f"{role}: calls retried with backoff through a provider outage (up to attempt {worst}) "
+                              "and the turn carried on once it was back")
         if lane and result.stats.retried:
             self._detail(lane, f"{len(result.stats.retried)} call(s) needed a retry; the turn carried on")
 

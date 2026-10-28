@@ -5,11 +5,12 @@ import { shortSha, type Environments, type RunView } from "../api";
 
 type Env = "prod" | "staging" | "canary";
 
-export function StorefrontPanel({ view, initial = "prod", large = false }: { view: Pick<RunView, "environments" | "apps">; initial?: Env; large?: boolean }) {
+export function StorefrontPanel({ view, initial = "prod", large = false }: { view: Pick<RunView, "environments"> & { apps: string | null; canary_fault?: RunView["canary_fault"] }; initial?: Env; large?: boolean }) {
   const [env, setEnv] = useState<Env>(initial);
   const e = view.environments;
   const sha = env === "staging" ? e.staging_sha : env === "canary" ? e.canary_sha : e.stable_sha;
-  const faulty = e.canary_fault_until > Date.now() / 1000;
+  const faulty = Boolean(view.canary_fault);
+  if (!view.apps) return <p className="empty muted">The storefront appears once a scenario has started.</p>;
   return (
     <div className={`storefront ${large ? "large" : ""}`}>
       <div className="storefront-bar">

@@ -26,7 +26,7 @@ class DeployCall(BaseModel):
 
 
 class CheckInput(BaseModel):
-    owner: str
+    slot: str  # the slot's task queue, which names its storefront path
     environments_id: str
     env: str  # "staging" or "canary"
 
@@ -66,7 +66,7 @@ class DeployActivities:
         """Probe the storefront's page, data and scripts, and for a canary also count the
         errors real browsers reported. A failing check is a result, not an error: the pipeline
         decides whether to roll back."""
-        base = f"{WEB_INTERNAL_URL}/apps/{input.owner}/{input.env}/"
+        base = f"{WEB_INTERNAL_URL}/apps/{input.slot}/{input.env}/"
         paths = ["", "products.json", "src/app.js", "src/cart.js", "styles.css"]
         rounds = CANARY_PROBES // len(paths) + 1 if input.env == "canary" else 1
         failures: list[str] = []
