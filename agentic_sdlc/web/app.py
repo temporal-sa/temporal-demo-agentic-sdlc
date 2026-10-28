@@ -365,7 +365,7 @@ async def run_stream(run_id: str, request: Request, ctx: Ctx = Depends(context))
         _not_found()
     queue = ctx.lease.queue
     workflow_id = run_workflow_id(queue, run_id)
-    queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=2000)
+    outbox: asyncio.Queue[bytes] = asyncio.Queue(maxsize=2000)
 
     async def snapshots():
         last = None
@@ -379,7 +379,7 @@ async def run_stream(run_id: str, request: Request, ctx: Ctx = Depends(context))
                 comparable = json.dumps({**view, "read_at": 0}, default=str)
                 if comparable != last:
                     last = comparable
-                    await queue.put(_sse("run", body))
+                    await outbox.put(_sse("run", body))
                 for agent in view["run"]["agents"]:
                     if agent["workflow_id"] not in attached:
                         attached.add(agent["workflow_id"])
@@ -392,7 +392,7 @@ async def run_stream(run_id: str, request: Request, ctx: Ctx = Depends(context))
             payload = _trim(event.event.model_dump(mode="json"))
             if payload.get("type") in _QUIET_EVENTS:
                 continue
-            await queue.put(_sse("agent", json.dumps({
+            await outbox.put(_sse("agent", json.dumps({
                 "agent_workflow_id": agent_id, "offset": stored.offset, "timestamp": event.timestamp, **payload,
             })))
 
@@ -402,7 +402,7 @@ async def run_stream(run_id: str, request: Request, ctx: Ctx = Depends(context))
         try:
             while not await request.is_disconnected():
                 try:
-                    yield await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)
+                    yield await asyncio.wait_for(outbox.get(), timeout=KEEPALIVE_SECONDS)
                 except TimeoutError:
                     yield b": keepalive\n\n"
         finally:
