@@ -38,8 +38,6 @@ class EnvState(BaseModel):
     stable_sha: str | None = None
     canary_sha: str | None = None
     canary_weight: int = 0
-    # Presenter fault: until this time the canary serves errors. Time-boxed and cleared on reset.
-    canary_fault_until: float = 0.0
     canary_traffic: Traffic = Field(default_factory=Traffic)
     history: list[Deployment] = Field(default_factory=list)
 
@@ -100,18 +98,12 @@ class Environments:
             if s.canary_sha == request.sha:
                 s.canary_sha, s.canary_weight = None, 0
         elif request.action == "rollback" and s.canary_sha == request.sha:
-            s.canary_sha, s.canary_weight, s.canary_fault_until = None, 0, 0.0
+            s.canary_sha, s.canary_weight = None, 0
         s.history = [*s.history, Deployment(action=request.action, sha=request.sha, run_id=request.run_id, at=now)][
             -MAX_HISTORY:
         ]
         self._changed()
         return s
-
-    @workflow.update
-    def break_canary(self, seconds: int) -> EnvState:
-        self._state.canary_fault_until = workflow.now().timestamp() + seconds
-        self._changed()
-        return self._state
 
     @workflow.update
     def reset(self) -> EnvState:

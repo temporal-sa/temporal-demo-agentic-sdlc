@@ -395,7 +395,8 @@ class IssueToProduction(AgentRun):
         """People try staging and decide on the issue. A comment that adjusts what they saw goes
         to a coding agent, staging redeploys, and they're asked again; a new requirement gets a
         reply suggesting its own issue."""
-        staging = f" Try it: {self._request.console_url}/apps/gh/staging/" if self._request.console_url else ""
+        slot = workflow.info().task_queue
+        staging = f" Try it: {self._request.console_url}/apps/{slot}/staging/" if self._request.console_url else ""
         announce = True
         while True:
             if announce:
@@ -544,7 +545,7 @@ class IssueToProduction(AgentRun):
 
     async def _check(self, env: str) -> CheckResult:
         return await workflow.execute_activity_method(DeployActivities.check_environment, CheckInput(
-            owner="gh", environments_id=self._environments_id, env=env), **QUICK)
+            slot=workflow.info().task_queue, environments_id=self._environments_id, env=env), **QUICK)
 
 
 REVISION_STEPS = {"plan", "gate:plan", "build", "pr", "review", "security", "gate:merge", "feedback"}

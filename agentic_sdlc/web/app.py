@@ -20,13 +20,14 @@ import secrets
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -36,16 +37,17 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.client import Client, WorkflowExecutionStatus, WorkflowUpdateFailedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from agentic_sdlc import config, faults, versions
-from agentic_sdlc.activities.github import CleanupInput, ScenarioInput, ScenarioStarted
+from agentic_sdlc.activities.github import ScenarioInput, ScenarioStarted
 from agentic_sdlc.agents.registry import allowlist
 from agentic_sdlc.models import RunState
 from agentic_sdlc.pipeline.environments import EnvState, TrafficBatch
+from agentic_sdlc.slots import Slot, SlotState
 from agentic_sdlc.temporal_client import EVENT_STREAM, connect
-from agentic_sdlc.web import webhooks
+from agentic_sdlc.web import sessions, webhooks
 
 log = logging.getLogger(__name__)
 
@@ -55,17 +57,25 @@ PIPELINE_DIR = Path(__file__).resolve().parent.parent / "pipeline"
 SOURCE_FILES = {"issue": "workflow.py", "dependency": "dependency.py", "review": "review.py", "base": "base.py"}
 ISSUES = yaml.safe_load((Path(__file__).resolve().parent.parent / "issues.yaml").read_text())
 
-RUNS_PREFIX = f"{config.TASK_QUEUE}.gh."
-ENVIRONMENTS_ID = f"{RUNS_PREFIX}environments"
 RUN_TYPES = "('IssueToProduction', 'DependencyRepair', 'PullRequestReview')"
 RUN_ID = re.compile(r"(issue|pr|review)-[0-9]{1,7}")
 KEEPALIVE_SECONDS = 15
 VIEW_CACHE_SECONDS = 0.9
 ENV_CACHE_SECONDS = 2.0
 TRAFFIC_FLUSH_SECONDS = 5
-WORKER_HEARTBEAT_PREFIX = f"workers:{config.TASK_QUEUE}:"
-CANARY_COOKIE = f"canary-{config.TASK_QUEUE}"
-SETTINGS_KEY = "run-settings:{}"  # per task queue, so each crashable workspace keeps its own
+SETTINGS_KEY = "run-settings:{}"  # per slot queue
+
+
+def runs_prefix(queue: str) -> str:
+    return f"{queue}.gh."
+
+
+def environments_id(queue: str) -> str:
+    return f"{runs_prefix(queue)}environments"
+
+
+def canary_cookie(queue: str) -> str:
+    return f"canary-{queue}"
 
 
 class State:
@@ -75,7 +85,7 @@ class State:
     view_cache: dict[str, tuple[float, dict]] = {}
     env_cache: dict[str, tuple[float, EnvState]] = {}
     file_cache: dict[tuple[str, str], tuple[int, bytes, str]] = {}
-    traffic: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # canary sha -> [page loads, errors]
+    traffic: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])  # (environments id, canary sha) -> [page loads, errors]
 
 
 state = State()
@@ -86,6 +96,7 @@ async def lifespan(_app: FastAPI):
     if not config.GITHUB_WEBHOOK_SECRET:
         raise RuntimeError("GITHUB_WEBHOOK_SECRET isn't set. It's the secret on the storefront repo's webhook "
                            "(scripts/setup-github.sh creates it); without it no GitHub event can be trusted.")
+    config.check_label_length()
     state.temporal = await connect()
     state.redis = Redis.from_url(config.REDIS_URL)
     state.http = httpx.AsyncClient(timeout=15, follow_redirects=True)
@@ -109,17 +120,57 @@ async def server_timing(request: Request, call_next):
 
 
 # -- Scope ---------------------------------------------------------------------------------
+#
+# Everything a console shows or does is scoped to the slot its browser holds. A browser holds one
+# only after it starts a scenario, so reads without a slot answer "nothing yet" and writes that
+# need one answer 409.
 
 
-def run_workflow_id(run_id: str) -> str:
+@dataclass
+class Ctx:
+    session: sessions.Session
+    lease: sessions.Lease | None
+
+
+async def context(request: Request, response: Response) -> Ctx:
+    session = sessions.load(request)
+    lease = await sessions.find(state.temporal, session)
+    if session.set_cookie:
+        sessions.issue(request, response, session)
+    return Ctx(session, lease)
+
+
+def held(ctx: Ctx) -> sessions.Lease:
+    if ctx.lease is None:
+        raise HTTPException(409, "There's no active session. Start a scenario first.")
+    return ctx.lease
+
+
+def slot_json(lease: sessions.Lease | None) -> dict | None:
+    if lease is None:
+        return None
+    s = lease.state
+    return {"n": lease.n, "queue": lease.queue, "crashed": s.crashed, "auto_restore_at": s.auto_restore_at,
+            "claimed_at": s.claimed_at, "expires_at": s.last_action_at + config.SESSION_IDLE_MINUTES * 60}
+
+
+async def act(ctx: Ctx) -> sessions.Lease:
+    """The caller did something on purpose, so the lease's idle clock restarts."""
+    try:
+        return await sessions.act(state.temporal, ctx.session, held(ctx))
+    except sessions.LeaseLost:
+        raise HTTPException(409, "Your session has ended. Start a scenario to begin a new one.") from None
+
+
+def run_workflow_id(queue: str, run_id: str) -> str:
     if not RUN_ID.fullmatch(run_id):
         raise HTTPException(400, "Bad run id")
-    return f"{RUNS_PREFIX}{run_id}"
+    return f"{runs_prefix(queue)}{run_id}"
 
 
-def require_ours(workflow_id: str) -> str:
-    # 404 rather than 403, so other copies' IDs aren't confirmed to exist.
-    if not workflow_id.startswith(RUNS_PREFIX):
+def require_ours(queue: str, workflow_id: str) -> str:
+    # 404 rather than 403, so other sessions' IDs aren't confirmed to exist.
+    if not workflow_id.startswith(runs_prefix(queue)):
         raise HTTPException(404, "Not found")
     return workflow_id
 
@@ -134,18 +185,21 @@ async def healthz():
 
 
 @app.get("/api/config")
-async def get_config():
+async def get_config(ctx: Ctx = Depends(context)):
     namespace = state.temporal.namespace
+    lease = ctx.lease
     return {
-        "owner_label": config.OWNER_LABEL,
+        "owner_label": lease.owner_label if lease else None,
         "models": allowlist(require_keys=False),
-        "settings": (await _settings_for(config.TASK_QUEUE)).model_dump(),
+        "settings": (await _settings_for(lease.queue) if lease else webhooks.RunSettings()).model_dump(),
         "issues": ISSUES,
         "budget_usd": config.DEFAULT_BUDGET_USD,
         "temporal_ui": f"{config.temporal_ui_url(namespace)}",
         "repo": config.GITHUB_SANDBOX_REPO,
         "local_controls": bool(config.SUPERVISOR_URL),
-        "task_queue": config.TASK_QUEUE,
+        "task_queue": lease.queue if lease else config.TASK_QUEUE,
+        "slot": slot_json(lease),
+        "slots": config.SESSION_SLOTS,
     }
 
 
@@ -157,24 +211,31 @@ async def pipeline_source(name: Literal["issue", "dependency", "review", "base"]
 
 
 @app.get("/api/overview")
-async def overview():
-    """The console's landing view: this copy's runs, environments, workers."""
-    runs, env, workers = await asyncio.gather(_list_runs(), _environments(), _workers())
-    return {"runs": runs, "environments": env.model_dump(), "workers": workers, "apps": "/apps/gh"}
+async def overview(ctx: Ctx = Depends(context)):
+    """The console's landing view: this session's runs, environments, workers. A browser that
+    hasn't started a scenario yet has none of them."""
+    if ctx.lease is None:
+        return {"runs": [], "environments": EnvState().model_dump(), "workers": [], "apps": None, "slot": None}
+    queue = ctx.lease.queue
+    runs, env, workers = await asyncio.gather(_list_runs(ctx.lease), _environments(queue), _workers(queue))
+    return {"runs": runs, "environments": env.model_dump(), "workers": workers, "apps": f"/apps/{queue}",
+            "slot": slot_json(ctx.lease), "canary_fault": await _canary_fault(queue, env),
+            "outages": await faults.outages(queue)}
 
 
-RESET_KEY = "reset_at:{}"
+async def _canary_fault(queue: str, env: EnvState) -> dict | None:
+    until = await faults.canary_fault(queue, env.canary_sha)
+    return {"sha": env.canary_sha, "until": until} if until else None
 
 
-async def _list_runs() -> list[dict]:
-    # Reset can't delete finished runs from Visibility, so it records when it happened and
-    # everything that started before is hidden: the scorecard starts from nothing again.
-    reset_at = float(await state.redis.get(RESET_KEY.format(config.TASK_QUEUE)) or 0)
-    query = f"WorkflowType IN {RUN_TYPES} AND WorkflowId STARTS_WITH '{RUNS_PREFIX}'"
+async def _list_runs(lease: sessions.Lease) -> list[dict]:
+    # Reset can't delete finished runs from Visibility. Whatever started before the slot's current
+    # lease belongs to a previous session, so it isn't listed: the scorecard starts from nothing.
+    query = f"WorkflowType IN {RUN_TYPES} AND WorkflowId STARTS_WITH '{runs_prefix(lease.queue)}'"
     runs = []
     async for execution in state.temporal.list_workflows(query, limit=20):
         memo = await execution.memo_value("run", default=None)
-        if memo and (memo.get("started_at") or 0) >= reset_at:
+        if memo and (memo.get("started_at") or 0) >= lease.state.claimed_at:
             closed = execution.status != WorkflowExecutionStatus.RUNNING
             summary = _run_summary(memo)
             if closed and summary["status"] in ("running", "waiting"):
@@ -189,11 +250,13 @@ def _run_summary(memo: dict) -> dict:
 
 
 @app.get("/api/runs/{run_id}")
-async def run_view(run_id: str):
-    return await _run_view(run_workflow_id(run_id)) or _not_found()
+async def run_view(run_id: str, ctx: Ctx = Depends(context)):
+    if ctx.lease is None:
+        _not_found()
+    return await _run_view(ctx.lease.queue, run_workflow_id(ctx.lease.queue, run_id)) or _not_found()
 
 
-async def _run_view(workflow_id: str) -> dict | None:
+async def _run_view(queue: str, workflow_id: str) -> dict | None:
     """Everything the run screen shows, from one cached group of free reads. Several viewers
     of the same run share one Describe a second."""
     cached = state.view_cache.get(workflow_id)
@@ -214,7 +277,7 @@ async def _run_view(workflow_id: str) -> dict | None:
     agent_ids = [a.workflow_id for a in run.agents]
     agent_descriptions, env, workers, armed = await asyncio.gather(
         asyncio.gather(*(_describe_quietly(a) for a in agent_ids)),
-        _environments(), _workers(), faults.armed([workflow_id, *agent_ids]),
+        _environments(queue), _workers(queue), faults.armed(queue, [workflow_id, *agent_ids]),
     )
     retries = [*_retries(workflow_id, description)]
     for agent_id, agent_description in zip(agent_ids, agent_descriptions):
@@ -231,8 +294,10 @@ async def _run_view(workflow_id: str) -> dict | None:
         "retries": retries,
         "faults": armed,
         "environments": env.model_dump(),
+        "canary_fault": await _canary_fault(queue, env),
+        "outages": await faults.outages(queue),
         "workers": workers,
-        "apps": "/apps/gh",
+        "apps": f"/apps/{queue}",
         "read_at": time.time(),
     }
     state.view_cache[workflow_id] = (time.monotonic(), view)
@@ -262,8 +327,8 @@ def _retries(workflow_id: str, description) -> list[dict]:
     return found
 
 
-async def _environments() -> EnvState:
-    wf_id = ENVIRONMENTS_ID
+async def _environments(queue: str) -> EnvState:
+    wf_id = environments_id(queue)
     cached = state.env_cache.get(wf_id)
     if cached and time.monotonic() - cached[0] < ENV_CACHE_SECONDS:
         return cached[1]
@@ -275,11 +340,11 @@ async def _environments() -> EnvState:
     return env
 
 
-async def _workers() -> list[dict]:
-    """Live workers on this task queue. Each worker refreshes a Redis key every two seconds
-    with a short TTL, so a killed worker disappears from the console within seconds."""
+async def _workers(queue: str) -> list[dict]:
+    """Live workers on the slot's task queue. Each hosted Worker refreshes a Redis key every two
+    seconds with a short TTL, and deletes it when it is stopped, so a crash shows at once."""
     workers = []
-    async for key in state.redis.scan_iter(f"{WORKER_HEARTBEAT_PREFIX}*"):
+    async for key in state.redis.scan_iter(f"workers:{queue}:*"):
         if raw := await state.redis.get(key):
             workers.append(json.loads(raw))
     return sorted(workers, key=lambda w: w.get("started_at", 0))
@@ -293,17 +358,22 @@ def _not_found():
 
 
 @app.get("/api/runs/{run_id}/stream")
-async def run_stream(run_id: str, request: Request):
+async def run_stream(run_id: str, request: Request, ctx: Ctx = Depends(context)):
     """One SSE stream per run view: run snapshots when they change, plus every agent's
     events (model calls, tool calls, approvals) relayed from Redis."""
-    workflow_id = run_workflow_id(run_id)
+    if ctx.lease is None:
+        _not_found()
+    queue = ctx.lease.queue
+    workflow_id = run_workflow_id(queue, run_id)
     queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=2000)
 
     async def snapshots():
         last = None
         attached: set[str] = set()
         while True:
-            view = await _run_view(workflow_id)
+            if await sessions.find(state.temporal, ctx.session) is None:
+                return  # the session ended: stop showing its run
+            view = await _run_view(queue, workflow_id)
             if view is not None:
                 body = json.dumps(view, default=str)
                 comparable = json.dumps({**view, "read_at": 0}, default=str)
@@ -401,15 +471,15 @@ SCENARIO_ACTIVITY = {"issue": "open_issue_for_copy", "dependency": "dispatch_bum
 
 
 @app.post("/api/scenarios")
-async def start_scenario(body: Scenario):
+async def start_scenario(body: Scenario, request: Request, response: Response, ctx: Ctx = Depends(context)):
     """Do on GitHub what a person would (open an issue, run the bump Action, open a PR), labeled
-    for this copy. The run itself starts when GitHub's webhook for it arrives. For the bump, the
-    presenter opens the PR from the returned link."""
+    for the caller's slot. Starting a scenario is how a browser takes a slot. The run itself
+    starts when GitHub's webhook for it arrives. For the bump, the presenter opens the PR from
+    the returned link."""
     if body.settings:
         for role, choice in body.settings.models:
             if choice.model not in allowlist(require_keys=False).get(choice.provider, ()):
                 raise HTTPException(400, f"{choice.key} isn't available for the {role}")
-        await state.redis.set(SETTINGS_KEY.format(config.TASK_QUEUE), body.settings.model_dump_json())
     title, text = "", ""
     if body.kind == "issue":
         prepared = next((i for i in ISSUES if i["id"] == body.issue_id), None)
@@ -417,11 +487,22 @@ async def start_scenario(body: Scenario):
         text = (body.body or (prepared or {}).get("body") or "").strip()[:4000]
         if not title:
             raise HTTPException(400, "An issue needs a title")
-    # The web server holds no GitHub token, so this runs on the worker as a Standalone Activity.
+    try:
+        lease = await sessions.claim(state.temporal, ctx.session)
+    except sessions.NoFreeSlot:
+        raise HTTPException(503, f"All {config.SESSION_SLOTS} sessions are in use. Try again in a few minutes.") from None
+    except sessions.LeaseLost:
+        raise HTTPException(409, "Your session has ended. Start a scenario to begin a new one.") from None
+    if ctx.session.set_cookie:
+        sessions.issue(request, response, ctx.session)
+    if body.settings:
+        await state.redis.set(SETTINGS_KEY.format(lease.queue), body.settings.model_dump_json())
+    # The web server holds no GitHub token, so this runs on the worker as a Standalone Activity. It
+    # runs on the copy's own queue, so it works while the slot's Workers are crashed.
     started = await state.temporal.execute_activity(
         SCENARIO_ACTIVITY[body.kind],
-        ScenarioInput(repo=config.GITHUB_SANDBOX_REPO, owner_label=config.OWNER_LABEL, title=title, body=text),
-        id=f"{RUNS_PREFIX}scenario-{body.kind}-{secrets.token_hex(4)}", task_queue=config.TASK_QUEUE,
+        ScenarioInput(repo=config.GITHUB_SANDBOX_REPO, owner_label=lease.owner_label, title=title, body=text),
+        id=f"{runs_prefix(lease.queue)}scenario-{body.kind}-{secrets.token_hex(4)}", task_queue=config.TASK_QUEUE,
         result_type=ScenarioStarted,
         # The bump waits for its Action to push the branch, usually about 30 seconds.
         start_to_close_timeout=timedelta(minutes=3), heartbeat_timeout=timedelta(seconds=30),
@@ -431,9 +512,10 @@ async def start_scenario(body: Scenario):
 
 
 @app.post("/api/runs/{run_id}/stop")
-async def stop_run(run_id: str):
+async def stop_run(run_id: str, ctx: Ctx = Depends(context)):
     """Cancel a run. It stops its agents and leaves its issue or PR on GitHub as it is."""
-    workflow_id = run_workflow_id(run_id)
+    lease = await act(ctx)
+    workflow_id = run_workflow_id(lease.queue, run_id)
     try:
         await state.temporal.get_workflow_handle(workflow_id).cancel()
     except RPCError as err:
@@ -451,10 +533,25 @@ class Fault(BaseModel):
 
 
 @app.post("/api/faults")
-async def inject_fault(body: Fault):
-    require_ours(body.workflow_id)
-    await faults.arm(body.workflow_id, body.kind, attempts=max(1, min(body.attempts, 4)))
+async def inject_fault(body: Fault, ctx: Ctx = Depends(context)):
+    lease = await act(ctx)
+    require_ours(lease.queue, body.workflow_id)
+    await faults.arm(lease.queue, body.workflow_id, body.kind, attempts=max(1, min(body.attempts, 4)))
     return {"armed": body.model_dump()}
+
+
+class Outage(BaseModel):
+    provider: faults.Provider
+    on: bool
+
+
+@app.post("/api/faults/outage")
+async def provider_outage(body: Outage, ctx: Ctx = Depends(context)):
+    """Take a model provider down for the caller's slot, or bring it back. Calls to it fail until
+    it is switched off (or ten minutes pass), and the agents keep retrying with backoff."""
+    lease = await act(ctx)
+    until = await faults.set_outage(lease.queue, body.provider, body.on)
+    return {"provider": body.provider, "until": until}
 
 
 class BreakCanary(BaseModel):
@@ -462,42 +559,50 @@ class BreakCanary(BaseModel):
 
 
 @app.post("/api/environments/break-canary")
-async def break_canary(body: BreakCanary):
-    env = await state.temporal.get_workflow_handle(ENVIRONMENTS_ID).execute_update(
-        "break_canary", min(body.seconds, 600), result_type=EnvState)
-    state.env_cache.pop(ENVIRONMENTS_ID, None)
-    return {"environments": env.model_dump()}
+async def break_canary(body: BreakCanary, ctx: Ctx = Depends(context)):
+    """Make the canary's assets fail for a while. The fault is a Redis key the storefront route
+    reads, not a Workflow Update, so this answers at once, whether or not the slot's Workers are up."""
+    lease = await act(ctx)
+    canary_sha = (await _environments(lease.queue)).canary_sha
+    if not canary_sha:
+        raise HTTPException(409, "No canary is taking traffic right now.")
+    until = await faults.break_canary(lease.queue, canary_sha, max(10, min(body.seconds, 600)))
+    return {"canary_sha": canary_sha, "until": until}
 
 
 @app.post("/api/reset")
-async def reset():
-    """Back to a clean slate for this copy only: stop its runs, empty its environments, clear its
-    faults, and close its labeled issues and PRs and delete their branches on GitHub."""
-    runs = await _list_runs()
-    for run in runs:
-        if not run["closed"]:
-            try:
-                await state.temporal.get_workflow_handle(run["workflow_id"]).terminate("Reset by presenter")
-            except RPCError:
-                pass
+async def reset(request: Request, response: Response, ctx: Ctx = Depends(context)):
+    """Give the slot back. Its Workflow stops the Workers and the slot's runs, empties its
+    environments and faults, and closes its issues and PRs on GitHub, in its own time. This
+    browser is released at once and, until it starts another scenario, holds no slot."""
+    lease = held(ctx)
     try:
-        await state.temporal.get_workflow_handle(ENVIRONMENTS_ID).execute_update("reset", result_type=EnvState)
-    except RPCError:
-        pass
-    await faults.clear([r["workflow_id"] for r in runs])
-    await state.temporal.start_activity(
-        "cleanup_runs",
-        CleanupInput(repo=config.GITHUB_SANDBOX_REPO, owner_label=config.OWNER_LABEL,
-                     branch_prefix=f"runs/{config.TASK_QUEUE}/"),
-        id=f"{RUNS_PREFIX}cleanup-{int(time.time())}",
-        task_queue=config.TASK_QUEUE,
-        start_to_close_timeout=timedelta(minutes=5),
-        heartbeat_timeout=timedelta(seconds=60),
-    )
-    await state.redis.set(RESET_KEY.format(config.TASK_QUEUE), time.time())
+        await state.temporal.get_workflow_handle(config.slot_workflow_id(lease.n)).execute_update(
+            Slot.release, ctx.session.sid, result_type=SlotState)
+    except (WorkflowUpdateFailedError, RPCError):
+        pass  # already expired or cleared: the browser is released either way
+    sessions.forget(ctx.session)
+    ctx.session.hint, ctx.session.set_cookie = 0, True
+    sessions.issue(request, response, ctx.session)
     state.view_cache.clear()
-    state.env_cache.clear()
-    return {"ok": True, "stopped": sum(1 for r in runs if not r["closed"])}
+    state.env_cache.pop(environments_id(lease.queue), None)
+    return {"ok": True}
+
+
+@app.post("/api/slot/{action}")
+async def slot_control(action: Literal["crash", "restore"], ctx: Ctx = Depends(context)):
+    """Stop or restart the Workers of the caller's slot, as if their process had died. Answers once
+    they have stopped (a few seconds), and works while the slot is already crashed."""
+    lease = held(ctx)
+    try:
+        slot_state = await state.temporal.get_workflow_handle(config.slot_workflow_id(lease.n)).execute_update(
+            Slot.crash if action == "crash" else Slot.restore, ctx.session.sid, result_type=SlotState)
+    except (WorkflowUpdateFailedError, RPCError):
+        sessions.forget(ctx.session)
+        raise HTTPException(409, "Your session has ended. Start a scenario to begin a new one.") from None
+    refreshed = sessions.Lease(lease.n, slot_state)
+    sessions.remember(ctx.session, refreshed)
+    return {"slot": slot_json(refreshed)}
 
 
 # -- Pipeline versions ----------------------------------------------------------------------
@@ -513,9 +618,11 @@ class SetVersion(BaseModel):
 
 
 @app.post("/api/versions/current")
-async def set_version(body: SetVersion):
+async def set_version(body: SetVersion, ctx: Ctx = Depends(context)):
     """Roll out a pipeline version: new runs start on it, in-flight runs stay pinned to theirs.
-    This is a presenter control for the whole deployment (each crashable workspace has its own)."""
+    This is a control for the whole deployment, so every session's new runs follow it (each
+    crashable workspace has its own deployment)."""
+    await act(ctx)
     try:
         return await versions.set_current(state.temporal, body.build_id)
     except RPCError as err:
@@ -549,25 +656,34 @@ async def worker_control(action: Literal["kill", "start"]):
 # -- Storefront environments ----------------------------------------------------------------
 
 
-@app.get("/apps/gh/{env}/{path:path}")
-async def serve_storefront(env: Literal["staging", "prod", "canary"], path: str, request: Request):
-    """Serve this copy's storefront exactly as committed: files are fetched from GitHub at an
+def own_slot_queue(queue: str) -> str:
+    """The storefront is public, so the slot is named in the path; it must be one of this copy's."""
+    parsed = config.parse_slot_queue(queue)
+    if parsed is None or parsed[0] != config.TASK_QUEUE or parsed[1] > config.SESSION_SLOTS:
+        raise HTTPException(404, "Not found")
+    return queue
+
+
+@app.get("/apps/{queue}/{env}/{path:path}")
+async def serve_storefront(queue: str, env: Literal["staging", "prod", "canary"], path: str, request: Request):
+    """Serve a slot's storefront exactly as committed: files are fetched from GitHub at an
     immutable commit and cached. Agent-written code only ever runs in the visitor's browser."""
-    environments = await _environments()
+    queue = own_slot_queue(queue)
+    environments = await _environments(queue)
     response = Response()
-    sha, is_canary = _route(environments, env, request, response)
+    sha, is_canary = _route(queue, environments, env, request, response)
     if sha is None:
         return HTMLResponse(_empty_page(env), status_code=200)
     path = path or "index.html"
     synthetic = request.headers.get("X-Synthetic-Check") == "1"
-    if is_canary and environments.canary_fault_until > time.time() and path != "index.html":
+    if is_canary and path != "index.html" and await faults.canary_fault(queue, sha):
         # Presenter fault, labeled in the console: the canary's assets fail to load.
         if not synthetic:
-            state.traffic[sha][1] += 1
+            state.traffic[(environments_id(queue), sha)][1] += 1
         return Response("Injected fault: canary asset unavailable", status_code=503)
     status, content, media_type = await _fetch_file(sha, path)
     if is_canary and not synthetic:
-        counts = state.traffic[sha]
+        counts = state.traffic[(environments_id(queue), sha)]
         counts[0] += path == "index.html"
         counts[1] += status >= 500
     if path == "index.html" and status == 200:
@@ -580,16 +696,17 @@ async def serve_storefront(env: Literal["staging", "prod", "canary"], path: str,
     return result
 
 
-@app.post("/apps/gh/{env}/__beacon")
-async def storefront_beacon(env: str, request: Request):
+@app.post("/apps/{queue}/{env}/__beacon")
+async def storefront_beacon(queue: str, env: str, request: Request):
     """Browser errors reported by the storefront's telemetry.js count against the canary."""
-    environments = await _environments()
-    if environments.canary_sha and request.cookies.get(CANARY_COOKIE) == environments.canary_sha:
-        state.traffic[environments.canary_sha][1] += 1
+    queue = own_slot_queue(queue)
+    environments = await _environments(queue)
+    if environments.canary_sha and request.cookies.get(canary_cookie(queue)) == environments.canary_sha:
+        state.traffic[(environments_id(queue), environments.canary_sha)][1] += 1
     return Response(status_code=204)
 
 
-def _route(env: EnvState, name: str, request: Request, response: Response) -> tuple[str | None, bool]:
+def _route(queue: str, env: EnvState, name: str, request: Request, response: Response) -> tuple[str | None, bool]:
     if name == "staging":
         return env.staging_sha, False
     if name == "canary":
@@ -598,10 +715,10 @@ def _route(env: EnvState, name: str, request: Request, response: Response) -> tu
     if not env.canary_sha:
         return stable, False
     # Production: a sticky share of visitors gets the canary.
-    assigned = request.cookies.get(CANARY_COOKIE)
+    assigned = request.cookies.get(canary_cookie(queue))
     if assigned not in (env.canary_sha, "stable"):
         assigned = env.canary_sha if secrets.randbelow(100) < env.canary_weight else "stable"
-        response.set_cookie(CANARY_COOKIE, assigned, max_age=3600, samesite="lax")
+        response.set_cookie(canary_cookie(queue), assigned, max_age=3600, samesite="lax")
     return (env.canary_sha, True) if assigned == env.canary_sha else (stable, False)
 
 
@@ -645,10 +762,10 @@ async def _flush_traffic_forever() -> None:
     while True:
         await asyncio.sleep(TRAFFIC_FLUSH_SECONDS)
         batch, state.traffic = state.traffic, defaultdict(lambda: [0, 0])
-        for sha, (requests, errors) in batch.items():
+        for (environments_workflow, sha), (requests, errors) in batch.items():
             if requests or errors:
                 try:
-                    await state.temporal.get_workflow_handle(ENVIRONMENTS_ID).signal(
+                    await state.temporal.get_workflow_handle(environments_workflow).signal(
                         "record_traffic", TrafficBatch(sha=sha, requests=requests, errors=errors))
                 except RPCError:
                     pass

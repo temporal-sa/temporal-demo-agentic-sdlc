@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -157,6 +157,9 @@ class CleanupInput(BaseModel):
     repo: str
     owner_label: str
     branch_prefix: str
+    # Only items opened before this (epoch seconds) are closed, so a reset that is still running
+    # when the slot's next user opens their first issue doesn't close it.
+    created_before: float | None = None
 
 
 class PullRequestRef(BaseModel):
@@ -477,6 +480,9 @@ class GitHubActivities:
         runs created. Other copies' work is left alone."""
         closed = 0
         for item in await self._get(f"/repos/{input.repo}/issues?state=open&labels={input.owner_label}&per_page=100"):
+            opened = datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")).timestamp()
+            if input.created_before is not None and opened >= input.created_before:
+                continue
             await self._request("PATCH", f"/repos/{input.repo}/issues/{item['number']}", {"state": "closed"})
             closed += 1
             if "pull_request" in item:
@@ -565,7 +571,7 @@ def _human(raw: dict, number: int, kind: str, *, file: str | None = None) -> Hum
 async def _maybe_inject_rate_limit() -> None:
     """Demo fault, armed by the presenter for this run and labeled as injected in the UI:
     answer as GitHub does when it rate limits, with a short Retry-After."""
-    if await faults.take(activity.info().workflow_id or "", "github_rate_limit"):
+    if await faults.take(activity.info().task_queue, activity.info().workflow_id or "", "github_rate_limit"):
         raise ApplicationError(
             "Injected: GitHub returned 429 Too Many Requests (Retry-After: 4s)",
             type="InjectedRateLimit",

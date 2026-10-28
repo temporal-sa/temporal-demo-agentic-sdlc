@@ -12,5 +12,6 @@ def workflow_runner() -> SandboxedWorkflowRunner:
             "agentic_sdlc.config", "agentic_sdlc.models", "agentic_sdlc.activities",
             "agentic_sdlc.agents.tools", "agentic_sdlc.agents.harness_ext", "agentic_sdlc.agents.registry",
             "agentic_sdlc.agents.runtime", "agentic_sdlc.faults", "agentic_sdlc.temporal_client",
+            "agentic_sdlc.versions",
         )
     )

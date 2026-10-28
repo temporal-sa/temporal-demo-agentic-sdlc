@@ -96,6 +96,7 @@ class DemoModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
+        await _maybe_inject_failure(self.wrapped)
         async with heartbeating():
             try:
                 return await super().request(messages, model_settings, model_request_parameters)
@@ -110,7 +111,7 @@ class DemoModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: RunContext[Any] | None = None,
     ) -> AsyncIterator[StreamedResponse]:
-        await _maybe_inject_rate_limit()
+        await _maybe_inject_failure(self.wrapped)
         async with heartbeating():
             try:
                 async with self.wrapped.request_stream(
@@ -121,12 +122,31 @@ class DemoModel(WrapperModel):
                 raise _classify(exc) from exc
 
 
-async def _maybe_inject_rate_limit() -> None:
-    """Demo fault: the presenter armed a rate limit for this agent (agentic_sdlc.faults).
-    The attempt fails as a provider 429 would, and the Activity's Retry Policy retries it."""
+PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}
+
+
+def provider_of(model: Any) -> str:
+    """The console's name for a model's provider (Pydantic AI calls Google's ``google-gla`` or ``google-vertex``)."""
+    system = str(model.system)
+    return "google" if system.startswith("google") else system
+
+
+async def _maybe_inject_failure(model: Any) -> None:
+    """Demo faults armed from the console (agentic_sdlc.faults), for the slot this Activity runs on.
+    An attempt fails as the provider would fail it, and the Activity's Retry Policy retries it:
+    a provider outage fails every call to that provider until it is switched off, and a rate
+    limit fails the next few calls of one agent."""
     from agentic_sdlc import faults
 
-    if activity.in_activity() and await faults.take(activity.info().workflow_id or "", "model_rate_limit"):
+    if not activity.in_activity():
+        return
+    info = activity.info()
+    provider = provider_of(model)
+    if provider in faults.PROVIDERS and await faults.outage(info.task_queue, provider):
+        raise ApplicationError(
+            f"Injected: {PROVIDER_NAMES[provider]} API returned 503 Service Unavailable", type="InjectedProviderOutage"
+        )
+    if await faults.take(info.task_queue, info.workflow_id or "", "model_rate_limit"):
         raise ApplicationError(
             "Injected: model provider returned 429 Too Many Requests", type="InjectedRateLimit"
         )
