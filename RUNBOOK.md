@@ -22,11 +22,12 @@ The seven decision criteria in the console's left rail are the problems, and eac
 
 ## Before you start
 
-- **Where it runs.** Hosted, the demo is `https://agentic-sdlc.tmprl-demo.cloud`, and a crashable workspace gives you your own copy with a crash button. Locally, run [`scripts/dev.py`](#run-it-locally).
+- **Where it runs.** Hosted, the demo is `https://agentic-sdlc.tmprl-demo.cloud`, and a crashable workspace gives you your own copy. Locally, run [`scripts/dev.py`](#run-it-locally).
 - **Agent comments show your GitHub account as the author.** The demo posts with its PAT, so GitHub attributes every comment to the token's owner. Each one starts with who really wrote it: **🤖 Planner agent**, **🤖 Coding agent**, **🤖 Code review agent**, or **⚙️ Pipeline** for the Workflow's own messages (gates, status, the release). Worth saying out loud the first time the audience sees one.
 - **It's all on one real repo:** [temporal-sa/agentic-sdlc-storefront](https://github.com/temporal-sa/agentic-sdlc-storefront). Every copy of the demo shares it. Each copy labels what it starts (`agentic-sdlc:<copy>`) and only acts on its own label, so you never pick up someone else's PR. `main` is locked: the agents get PRs to "ready to merge", and nothing merges.
 - **Real calls cost real money.** A dependency repair or review costs about $0.10 to $0.60 in estimated model spend; an issue run $0.20 to $1.50. The per-run budget is $3.
-- **Ship one issue run before the audience arrives.** Act 1 opens with the result. Start an issue scenario on auto merge, reply `/approve` and `/ship` on the issue, and let it finish (about 5 minutes).
+- **Sessions.** Starting a scenario leases you a *session slot*: your own task queue, Workers, environments, faults and GitHub label (`agentic-sdlc:<copy>--sNN`). Opening the console claims nothing, so other people on the page never see your runs. The lease lasts 2 hours after your last action (starting, stopping, a fault, a crash, or a comment on your run's issue or PR; watching never extends it). **Reset** releases it at once. The hosted copy has 8 slots, a crashable workspace 2. When all are taken, **Start a scenario** says so; wait, or free a stuck one ([below](#when-something-goes-wrong)).
+- **Nothing is pre-run.** Act 1 shows "No change has shipped in this session yet" until your first issue run finishes. If you want the result to open the talk, run one before the audience arrives: start an issue scenario on auto merge, reply `/approve` and `/ship`, and let it finish (about 5 minutes), without pressing Reset.
 - **Open three tabs:** the console, the Temporal UI, and [the repo's pull requests](https://github.com/temporal-sa/agentic-sdlc-storefront/pulls). Sign in to GitHub as yourself; you'll be commenting.
 - **The GitHub token expires on 2027-10-22.** See [Rotate the GitHub token](#rotate-the-github-token).
 
@@ -70,9 +71,9 @@ Keys: **1–6** switch acts, **N** starts a scenario.
 
 **Say:** "I didn't tell our tool anything. GitHub told Temporal a PR was opened, and a Workflow started for it. The agent's check is required, so this PR can't merge until the agent says so."
 
-**Do:** while **Fix** is active, kill the worker: **Kill the worker** locally, or crash the worker from the catalog workspace. Start it again after about 5 seconds.
+**Do:** while **Fix** is active, press **Crash my worker** in the bottom bar. Press **Bring it back** after about 5 seconds. (If you forget, it restores itself after 5 minutes.)
 
-**The audience sees** **no workers** in yellow and a banner saying the run is paused, not lost. After the restart the coding agent carries on: new tool calls in its card, the token count continuing. **D1** ticks when its turn completes.
+**The audience sees** **no workers** in yellow and a banner saying the run is paused, not lost. After it comes back the coding agent carries on: new tool calls in its card, the token count continuing. **D1** ticks when its turn completes.
 
 **Optionally**, click **Inject 429** on the coder's card: its lane turns pink, "Attempt 2: model provider returned 429", and recovers. **D3** ticks.
 
@@ -114,17 +115,25 @@ Keys: **1–6** switch acts, **N** starts a scenario.
 
 **Do:** comment on the PR: *"The button should say 'Move to cart', not just an icon."* A coding agent fixes it on the PR branch and the reviewer looks again. **Optional, a scope change:** comment *"Also show how many items are saved in the header"*. The planner calls it a scope change: the PR closes with an explanation, the plan is revised on the issue and needs `/approve` again.
 
-**Do:** let the window close. After staging, the issue says "🚦 Staging passed its checks. Try it: …/apps/gh/staging/. Reply `/ship` …, `/stop <reason>`, or comment with what to change …" Open staging, then reply `/ship`. (Optional: comment an adjustment first, like "make the discount banner bigger". A coding agent changes it on staging, staging redeploys, and the issue asks for `/ship` again. A new requirement gets a reply suggesting its own issue.)
+**Do:** let the window close. After staging, the issue says "🚦 Staging passed its checks. Try it: …/apps/<your slot>/staging/. Reply `/ship` …, `/stop <reason>`, or comment with what to change …" Open staging, then reply `/ship`. (Optional: comment an adjustment first, like "make the discount banner bigger". A coding agent changes it on staging, staging redeploys, and the issue asks for `/ship` again. A new requirement gets a reply suggesting its own issue.)
 
 ### 6. Break the canary (D4)
 
-**Do:** while **Canary** is active (it bakes for about 90 seconds), click **Break the canary** in the bottom bar.
+**Do:** while **Canary** is active (it bakes for about 90 seconds), press **Break the canary** in the bottom bar. It is disabled, with a tooltip, until a canary is taking traffic.
 
-**The audience sees** the canary checks fail. The pipeline stops canary traffic, opens and merges a revert PR, reopens the issue with the findings, and the run ends **Rolled back**. **D4** ticks.
+**The audience sees** a toast, a countdown on the button and a banner right away, and the canary node in the graph outlined. Then the canary checks fail (the pipeline checks every 15 seconds). The pipeline stops canary traffic, opens and merges a revert PR, reopens the issue with the findings, and the run ends **Rolled back**. **D4** ticks.
 
 **Say:** "That's a saga. Each step has its compensation, and the Workflow runs them in order. Nobody got paged."
 
 To show a clean ship instead, skip this beat. The canary promotes after its checks.
+
+### 6b. A model provider goes down
+
+**Do:** while an agent is working, pick its provider in the bottom bar's provider list and press **Take it down**. Wait for a few failed attempts, then press **Bring it back**.
+
+**The audience sees** a banner naming the provider, and on each agent that uses it the failed attempts and the waits between them (2s · 4s · 8s · 16s · 30s), with a live countdown to the next one. Agents on other providers keep working. Failed attempts spend no tokens. Once it is back, the next attempt succeeds and the run goes on. **D3** ticks. An outage nobody switches off clears after 10 minutes.
+
+**Say:** "Nothing here handles the outage. The model call is an Activity with a retry policy, so Temporal backs off and tries again until the provider is back. The Workflow never failed."
 
 ### 7. Change the pipeline mid-run (D5)
 
@@ -134,7 +143,7 @@ To show a clean ship instead, skip this beat. The canary promotes after its chec
 
 **Say:** "Both versions are deployed. Rolling out v2 is one call to Temporal. Each run is pinned to the version it started on, so running work finishes exactly as it began, new work gets the new pipeline, and nothing is patched in place."
 
-**Note:** the rollout applies to everyone on the same deployment. In the shared hosted demo, switch back with **Make v1 current again** afterwards; a crashable workspace has its own deployment.
+**Note:** the rollout applies to every session on the same deployment: new runs everywhere start on v2. In the shared hosted demo, switch back with **Make v1 current again** afterwards; a crashable workspace has its own deployment.
 
 ### 8. Proof (act 6, D6)
 
@@ -320,7 +329,9 @@ deployment = WorkerDeploymentConfig(
 
 ## Reset and tear down
 
-- **Between audiences:** click **Reset** in the bottom bar. It ends this copy's runs, empties its environments, clears faults, closes its labeled issues and PRs and deletes their branches. Other copies' work isn't touched.
+- **Between audiences:** click **Reset** in the bottom bar. It releases your slot, which ends your runs, empties your environments, clears your faults, and closes your labeled issues and PRs and deletes their branches. Other sessions' work isn't touched. Closing the issues takes a few seconds after the console empties.
+- **A stuck slot:** in the Temporal UI, find the Workflow `<copy>.slot-NN` and terminate it; the slot is free for the next scenario. Its runs, if any, keep going until you terminate them or they time out. To also close its GitHub items, start `cleanup_runs` for its label by hand, or let the next session's Reset do it.
+- **Before deploying this version:** reset the hosted copy first. Runs and Environments from before slots existed live on the copy's own queue and are orphaned (they don't show in any session); terminate them in the Temporal UI (`WorkflowId STARTS_WITH 'agentic-sdlc.'` and not `.slot-`).
 - **One run:** **Stop run** cancels it; its issue or PR stays on GitHub as it is.
 - **Back to v1:** press **5** and click **Make v1 current again**. Do this after every D5 beat in the shared hosted demo.
 - **Nothing left running:** PR conversations close after a quiet day (the agent closes the PR with a note); every run ends within 3 days; environments close after 24 hours idle; faults expire after 10 minutes.
@@ -331,11 +342,14 @@ deployment = WorkerDeploymentConfig(
 |---|---|---|
 | A scenario started on GitHub but no run appears | The webhook didn't arrive | Locally, check `.logs/webhooks.log` and that `dev.py` printed the GitHub line. Hosted, check the repo's **Settings → Webhooks → Recent deliveries** (redeliver from there) |
 | The bump scenario says the Action didn't push its branch | The Action failed or is queued | Check the repo's **Actions** tab, then start the scenario again |
-| The bump PR is open but no run appears | It was opened without this copy's owner label | Add the label (`agentic-sdlc:<copy>`) to the PR; the run starts then |
+| The bump PR is open but no run appears | It was opened without your slot's label | Add the label (`agentic-sdlc:<copy>--sNN`, shown on the PR's sibling items) to the PR; the run starts then |
 | `dev.py` says webhook forwarding didn't start | Someone else is forwarding the repo, or your gh login lacks `admin:repo_hook` | Wait for them to stop, or `gh auth refresh -s admin:repo_hook` |
-| The agent comments "This demo already has 3 agent runs in progress" | The per-copy cap | Stop a run, or **Reset**, then reopen the issue or PR |
+| The agent comments "This demo already has 3 agent runs in progress" | The per-session cap | Stop a run, or **Reset**, then reopen the issue or PR |
+| The agent comments "too many agent runs" | The copy-wide cap across all sessions | Wait for other runs to finish |
+| **Start a scenario** says all sessions are in use | Every slot is leased | Wait (leases end 2 hours after the last action), or terminate a stale `<copy>.slot-NN` Workflow |
+| An issue you open gets no run | It has no slot label, its slot isn't leased, or it was created before the lease began | Start the scenario from the console; the demo ignores unlabeled items |
 | A comment doesn't change anything | The gate wants a command (`/continue` or `/stop` at the budget gate), or the comment started with a command the gate isn't waiting for | The **Conversation** tab says "Noted; the run is waiting for …" |
-| Top right says **no workers** and nothing moves | The worker was killed or crashed | Click **Start a worker**, or check `.logs/worker-v1.log` |
+| Top right says **no workers** and nothing moves | You crashed the worker, or the process died | Press **Bring it back** (it also restores itself after 5 minutes); locally, **Start a worker** or check `.logs/worker-v1.log` |
 | A step is pink with `GitHub 401` or `403` | The GitHub token expired or lacks a permission | [Rotate the GitHub token](#rotate-the-github-token) |
 | A step is pink with `ProviderRejected` | A model name or key is wrong for that provider | Pick another model in **Start a scenario**, or check the key |
 | The run stops at **Budget** | Estimated spend reached the run's budget | Reply `/continue` on the issue or PR |
@@ -363,7 +377,7 @@ npm --prefix web ci && npm --prefix web run build
 uv run python scripts/dev.py
 ```
 
-`.env.local` (gitignored) needs at least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, plus `GITHUB_TOKEN`. `scripts/dev.py` starts a Temporal dev server (persisted to `.logs/temporal.db`) with the search attribute the webhook needs, Redis, the web server on :8000, a worker per pipeline version, and `gh webhook forward` relaying the repo's events to the web server. It also listens on 127.0.0.1:8765 for the console's kill and start buttons.
+`.env.local` (gitignored) needs at least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, plus `GITHUB_TOKEN`. `scripts/dev.py` starts a Temporal dev server (persisted to `.logs/temporal.db`) with the search attribute the webhook needs, Redis, the web server on :8000, a worker per pipeline version, and `gh webhook forward` relaying the repo's events to the web server. It also listens on 127.0.0.1:8765 for the console's kill-the-process and start buttons.
 
 Your laptop is its own copy of the demo: task queue `local-<your GitHub login>`, acting only on items labeled `agentic-sdlc:local-<login>`. "Start a scenario" labels what it opens; to drive the laptop from GitHub by hand, add that label to your issue or PR. GitHub allows one forwarder per repo at a time.
 

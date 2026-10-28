@@ -53,7 +53,7 @@ flowchart LR
 
 All of it happens on [temporal-sa/agentic-sdlc-storefront](https://github.com/temporal-sa/agentic-sdlc-storefront), a small storefront whose `main` stays locked: the agents get PRs ready to merge, and nothing merges into the shared repo.
 
-**Dependency repair.** The repo's *Dependency bump* Action pushes a Dependabot-style branch that upgrades [orbit-money](https://github.com/temporal-sa/orbit-money) from 1.0 to 2.0, which has breaking changes, and the console hands the presenter GitHub's prefilled "Open a pull request" page for it. (The `temporal-sa` org doesn't let Actions open PRs, and a person opening it is the developer's part of the story.) Opening the PR starts the run.
+**Dependency repair.** The repo's *Dependency bump* Action pushes a Dependabot-style branch that upgrades [orbit-money](https://github.com/temporal-sa/orbit-money) from 1.0 to 2.0, which has breaking changes, and the console hands you GitHub's prefilled "Open a pull request" page for it. (The `temporal-sa` org doesn't let Actions open PRs, and a person opening it is the developer's part of the story.) Opening the PR starts the run.
 
 1. The agent's required check goes pending. The run tests the bump branch; if it passes, the check goes green and that's it.
 2. If it fails, a coding agent diagnoses it from the test output, the diff and the package's changelog, and posts the diagnosis.
@@ -95,7 +95,7 @@ Open the console at http://localhost:8000 and the Temporal UI at http://localhos
 
 | Command | What it does |
 |---|---|
-| `uv run python scripts/dev.py` | Temporal, Redis, the web server and a worker per pipeline version (v1, v2), with the console's kill and start controls |
+| `uv run python scripts/dev.py` | Temporal, Redis, the web server and a worker per pipeline version (v1, v2), with the console's kill-the-process and start controls |
 | `uv run python scripts/drive_run.py dependency` | A scenario from the command line (`dependency`, `review` or `issue`), answering on GitHub with `gh` |
 | `uv run python scripts/drive_conversation.py` | Rehearses every steering beat of the issue flow on GitHub |
 | `scripts/setup-github.sh [--webhook-url URL]` | Labels, rulesets, the template on `main`, the sample PR branch, and the hosted webhook |

@@ -1,4 +1,4 @@
-"""Run the whole demo locally, with presenter controls for the worker.
+"""Run the whole demo locally, with controls for the worker process.
 
     uv run python scripts/dev.py            # Temporal, Redis, web on :8000, v1 and v2 workers, GitHub webhooks
     uv run python scripts/dev.py --no-temporal   # use a Temporal you started yourself
@@ -9,12 +9,13 @@ runs. GitHub allows one forwarder per repo at a time; if someone else is forward
 and says so. Your gh login needs the admin:repo_hook scope (`gh auth refresh -s admin:repo_hook`).
 
 This laptop is its own copy of the demo: task queue `local-<your GitHub login>`, and it acts only
-on issues and PRs labeled `agentic-sdlc:local-<login>`, which "Start a scenario" adds. The hosted
+on issues and PRs labeled with one of its session slots (`agentic-sdlc:local-<login>--s01`, ...), which
+"Start a scenario" adds. The hosted
 demo ignores that label, so the two never pick up each other's work.
 
 It supervises the processes and listens on 127.0.0.1:8765 for the console's controls:
 
-    POST /kill          SIGKILL every worker (the "crash" beat)
+    POST /kill          SIGKILL every worker process (the console's "Crash my worker" stops just the session's Workers)
     POST /start         start the workers again
 
 It runs one worker per pipeline version (build IDs v1 and v2), as the catalog does. The console
