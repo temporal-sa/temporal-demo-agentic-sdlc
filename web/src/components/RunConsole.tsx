@@ -27,10 +27,11 @@ function retryingSteps(view: RunView): Map<string, Retry> {
   const result = new Map<string, Retry>();
   const byAgent = new Map(view.run.agents.map((a) => [a.workflow_id, a]));
   for (const retry of view.retries) {
-    const agent = byAgent.get(retry.workflow_id);
-    if (agent) {
-      const key = agent.lane ? `code:${agent.lane}` : agent.role.startsWith("reviewer") ? "review" : agent.role === "planner" ? "plan" : "pr";
-      result.set(key, retry);
+    // Parallel coder lanes have steps of their own. Every other agent works for whichever step is
+    // running, and one agent can serve several steps (the dependency coder diagnoses, then fixes).
+    const lane = byAgent.get(retry.workflow_id)?.lane;
+    if (lane) {
+      result.set(`code:${lane}`, retry);
     } else {
       for (const s of view.run.steps) if (s.status === "active") result.set(s.key, retry);
     }
