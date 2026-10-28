@@ -94,8 +94,24 @@ export function RunConsole({ view, feeds, config, onError }: {
         </div>
       )}
 
+      {Object.entries(view.outages).map(([provider, until]) => (
+        <div key={provider} className="state-banner" role="status">
+          <strong>{PROVIDER_NAME[provider] ?? provider} is down (injected).</strong>
+          <span>
+            Agents on it retry with backoff; the others keep working. It clears by itself in {clock(until - now)}.
+          </span>
+        </div>
+      ))}
+      {view.canary_fault && (
+        <div className="state-banner" role="status">
+          <strong>The canary is broken (injected).</strong>
+          <span>Its assets return 503 for another {clock(view.canary_fault.until - now)}. The pipeline's next canary check fails and rolls it back.</span>
+        </div>
+      )}
+
       <section className="card graph-card">
-        <PipelineGraph run={run} selected={focus} onSelect={(k) => setSelected(k === selected ? null : k)} retrying={new Set(retries.keys())} />
+        <PipelineGraph run={run} selected={focus} onSelect={(k) => setSelected(k === selected ? null : k)} retrying={new Set(retries.keys())}
+          faulty={view.canary_fault ? new Set(["canary"]) : undefined} />
         <GraphLegend />
       </section>
 
@@ -111,7 +127,7 @@ export function RunConsole({ view, feeds, config, onError }: {
           ) : (
             <>
               {run.diagnosis && run.steps.some((s) => s.key === "fix" && s.status === "active") && <DiagnosisCard run={run} />}
-              <AgentsPanel view={view} feeds={feeds} focus={focus} onError={onError} />
+              <AgentsPanel view={view} feeds={feeds} focus={focus} config={config} onError={onError} />
             </>
           )}
         </section>
@@ -133,6 +149,16 @@ export function RunConsole({ view, feeds, config, onError }: {
     </div>
   );
 }
+
+const PROVIDER_NAME: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" };
+
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// The model Activity's Retry Policy (agents/runtime.py): 2 s initial interval, doubling, capped at 30 s.
+const backoff = (failed: number) => Array.from({ length: failed }, (_, i) => Math.min(2 * 2 ** i, 30));
 
 const CHECK_LABEL: Record<string, string> = {
   pending: "Agent check pending", success: "Agent check passed", failure: "Agent wants changes", error: "Agent check errored",
@@ -290,7 +316,7 @@ function PlanSummary({ view }: { view: RunView }) {
 
 // -- Agents at work -----------------------------------------------------------------------
 
-function AgentsPanel({ view, feeds, focus, onError }: { view: RunView; feeds: Record<string, AgentFeed>; focus: string | null; onError: (m: string) => void }) {
+function AgentsPanel({ view, feeds, focus, config, onError }: { view: RunView; feeds: Record<string, AgentFeed>; focus: string | null; config: Config; onError: (m: string) => void }) {
   const agents = view.run.agents;
   if (agents.length === 0) {
     return <p className="empty muted">Agents appear here as the pipeline starts them. Each one is its own Workflow.</p>;
@@ -305,7 +331,8 @@ function AgentsPanel({ view, feeds, focus, onError }: { view: RunView; feeds: Re
         {ordered.map((a) => (
           <AgentCard key={a.workflow_id} agentId={a.workflow_id} role={a.role} model={a.model} feed={feeds[a.workflow_id]}
             retry={view.retries.find((r) => r.workflow_id === a.workflow_id)} faults={view.faults[a.workflow_id] ?? []}
-            closed={view.closed} onError={onError}
+            closed={view.closed} onError={onError} outage={view.outages[a.model.split(":")[0] as keyof typeof view.outages] !== undefined}
+            temporalUrl={temporalLink(config.temporal_ui, a.workflow_id, view.agent_run_ids[a.workflow_id])}
             queued={a.lane ? view.run.conversation.filter((f) => f.kind === "steer" && f.status !== "addressed") : []} />
         ))}
       </div>
@@ -313,11 +340,24 @@ function AgentsPanel({ view, feeds, focus, onError }: { view: RunView; feeds: Re
   );
 }
 
+/** The model call's retries during a provider outage: each failed attempt and the wait that followed. */
+function Backoff({ retry, temporalUrl }: { retry: Retry; temporalUrl: string }) {
+  const waits = backoff(Math.max(0, retry.attempt - 1));
+  return (
+    <div className="agent-retry mono">
+      <div>Attempt {retry.attempt}: {explainFailure(retry.last_failure)}</div>
+      <div>Waits between attempts, from the Retry Policy: {waits.length ? waits.map((w) => `${w}s`).join(" · ") : "none yet"}
+        {retry.next_attempt_in !== null && <> · next attempt in {Math.max(0, Math.ceil(retry.next_attempt_in))}s</>}</div>
+      <div>Failed attempts spend no tokens. <a href={temporalUrl} target="_blank" rel="noreferrer">See the pending Activity in Temporal ↗</a></div>
+    </div>
+  );
+}
+
 const ROLE_NAME: Record<string, string> = { planner: "Planner", "reviewer-quality": "Code reviewer", "reviewer-security": "Security reviewer", "coder-integration": "Integration coder" };
 
-function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError, queued }: {
+function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError, queued, outage, temporalUrl }: {
   agentId: string; role: string; model: string; feed?: AgentFeed; retry?: Retry; faults: string[]; closed: boolean;
-  onError: (m: string) => void; queued: Feedback[];
+  onError: (m: string) => void; queued: Feedback[]; outage: boolean; temporalUrl: string;
 }) {
   const name = ROLE_NAME[role] ?? (role.startsWith("coder-") ? `Coder · ${role.slice(6)}` : role);
   const status = retry ? "retrying" : feed?.thinking || feed?.tools.some((t) => t.status === "running") ? "active" : "completed";
@@ -337,7 +377,9 @@ function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError,
         <span>{feed?.tools.length ?? 0} tool calls</span>
       </div>
       {faults.length > 0 && <div className="injected mono">Injected fault armed: {faults.join(", ").replace(/_/g, " ")}</div>}
-      {retry && <div className="agent-retry mono">Attempt {retry.attempt}: {explainFailure(retry.last_failure)}</div>}
+      {retry && outage ? <Backoff retry={retry} temporalUrl={temporalUrl} /> : retry && (
+        <div className="agent-retry mono">Attempt {retry.attempt}: {explainFailure(retry.last_failure)}</div>
+      )}
       <ol className="tool-log">
         {(feed?.tools ?? []).slice(-6).map((t) => (
           <li key={t.id} data-status={t.status === "done" ? "completed" : t.status === "error" ? "failed" : t.status === "awaiting" ? "waiting" : "active"}>
