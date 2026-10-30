@@ -6,19 +6,20 @@ import type { Criterion } from "./api";
 export interface Source { label: string; url: string }
 
 export const SOURCES = {
+  octoverse: {
+    label: "GitHub Octoverse (Oct 28, 2026)",
+    url: "https://github.blog/news-insights/octoverse/octoverse-commits-pushes-reach-new-highs-in-2026-as-developers-build-with-agents/",
+  },
   forrester: {
     label: "Diego Lo Giudice, Forrester (June 8, 2026)",
-    url: "http://www.forrester.com/blogs/agentic-software-development-takes-the-lead-from-code-assistants-to-orchestrated-sdlc-agents/",
+    url: "https://www.forrester.com/blogs/agentic-software-development-takes-the-lead-from-code-assistants-to-orchestrated-sdlc-agents/",
   },
-  keyhole: {
-    label: "Keyhole Software, 2026 adoption and impact data (Sept 2, 2026)",
-    url: "https://keyholesoftware.com/agentic-ai-in-the-software-development-lifecycle-2026-adoption-and-impact-data/",
+  dora: {
+    label: "DORA 2025 State of AI-assisted Software Development, Google Cloud (Sept 23, 2025)",
+    url: "https://cloud.google.com/blog/products/ai-machine-learning/announcing-the-2025-dora-report",
   },
-  ciklum: { label: "Julian Beckers, Ciklum (July 12, 2026)", url: "https://www.ciklum.com/blog/ai-revolutionize-software-development-lifecycle/" },
   duolingo: { label: "Jesse Welch, Duolingo Engineering (Dec 4, 2025)", url: "https://blog.duolingo.com/buildingaiagents" },
   port: { label: "Zohar Einy, Port (2026)", url: "https://www.port.io/blog/agentic-sdlc-software-lifecycle-rebuilt-around-agents" },
-  kanbots: { label: "KanBots, Parallelize AI coding agents", url: "https://kanbots.dev/learn/parallelize-ai-coding-agents" },
-  veza: { label: "Matt Biggin, Veza Digital (April 17, 2026)", url: "https://vezadigital.com/post/best-ai-agents" },
 } satisfies Record<string, Source>;
 
 export const ACTS = [
@@ -33,19 +34,19 @@ export type ActKey = (typeof ACTS)[number]["key"];
 
 export const STATS = [
   {
+    value: "17% → over 40%",
+    claim: "By September 2026, more than 40% of pull requests on GitHub started with an agent's first draft, up from 17% in March.",
+    source: SOURCES.octoverse,
+  },
+  {
     value: "30–40% → under 10%",
     claim: "Coding may improve by 30% to 40%, but if planning, testing, and release remain manual, overall team productivity often increases by less than 10%.",
     source: SOURCES.forrester,
   },
   {
-    value: "84–90% vs 13%",
-    claim: "Roughly 84–90% of developers use AI tools for coding, but only about 13% of teams have AI operating across the full development lifecycle.",
-    source: SOURCES.keyhole,
-  },
-  {
-    value: "Review, quality, governance",
-    claim: "The new bottleneck is shifting from code generation to review, quality, governance, and architecture.",
-    source: SOURCES.ciklum,
+    value: "Faster, and less stable",
+    claim: "90% of respondents use AI at work. AI adoption now raises delivery throughput, and it “does continue to have a negative relationship with software delivery stability.”",
+    source: SOURCES.dora,
   },
 ];
 
@@ -84,7 +85,6 @@ export const CRITERIA: CriterionInfo[] = [
     id: "D3",
     title: "Parallel agents, flaky APIs and spend stay under control",
     problem: "Four agents cost four times as much, and every provider and API rate limits you.",
-    quote: { text: "Four agents in parallel is four times the burn.", source: SOURCES.kanbots },
     beat: "Coding agents run in parallel. One is rate limited and retries while the others keep going. The run stops at its budget until someone replies /continue.",
     temporal: "Child Workflows, Retry Policies, and a budget the Workflow enforces",
   },

@@ -1,6 +1,14 @@
 # Agentic SDLC on Temporal
 
-AI agents work in a real GitHub repo, and people work with them there. A Dependabot-style bump breaks the build: an agent works out why from the failures and the dependency's changelog, fixes the code on the bump branch and rewrites the PR to explain it. A person opens a PR: an agent reviews it inline behind a required check and pushes fixes when asked. An issue labeled `agent`: agents plan it, code it in parallel, review it and ship it through a canary. Temporal runs the process around them and keeps that work alive through worker crashes, days-long waits for people, rate limits and a bad canary.
+Agents now write much of the code. GitHub measured that over 40% of pull requests in September 2026 started with an agent's draft, up from 17% in March.[^1] Shipping hasn't kept pace. Forrester's estimate: "Coding may improve by 30% to 40%, but if planning, testing, and release remain manual, overall team productivity often increases by less than 10%."[^2] DORA finds AI adoption raising throughput while still hurting delivery stability.[^3] And the agents that take on the rest of the lifecycle are long-running processes with the usual problems. Duolingo's team notes that "even a well prompted agent may go off the rails and crash, fail to produce any changes, hang/freeze, or otherwise fail to complete, and need to be retried."[^4]
+
+"Agentic SDLC" is the name for agents working across planning, build, review and release, with people still accountable for the result. This demo shows Temporal running the process around those agents in a real GitHub repo, with the agents on Anthropic, OpenAI or Gemini. Three scenarios, from everyday to full lifecycle: a dependency bump that breaks the build, a pull request that needs review, and an issue taken all the way to production.
+
+What you'll see go wrong, and what happens next:
+
+- The worker dies while an agent is fixing the broken upgrade. A new worker continues from the agent's last finished call, and the token meter doesn't jump.
+- The run waits for `/approve` on the plan and `/ship` for production. It can wait minutes or days, costs nothing while it waits, and a GitHub comment resumes it.
+- The canary fails in production. The pipeline stops its traffic, reverts the merge through a PR and reopens the issue.
 
 Everything is driven by GitHub's webhooks and everyone talks to the agents on GitHub. The console is a window onto what the agents are doing.
 
@@ -123,3 +131,8 @@ Open the console at http://localhost:8000 and the Temporal UI at http://localhos
 - **Costs are estimates** from token counts and the genai-prices database that ships with Pydantic AI, not provider bills.
 - **The GitHub token expires on 2027-10-22.** Rotation is in the RUNBOOK.
 - The story, the research and every source are in [docs/story.md](docs/story.md). Catalog decisions are in [docs/catalog.md](docs/catalog.md).
+
+[^1]: GitHub, [Octoverse 2026](https://github.blog/news-insights/octoverse/octoverse-commits-pushes-reach-new-highs-in-2026-as-developers-build-with-agents/), October 28, 2026.
+[^2]: Diego Lo Giudice, Forrester, [Agentic Software Development Takes The Lead](https://www.forrester.com/blogs/agentic-software-development-takes-the-lead-from-code-assistants-to-orchestrated-sdlc-agents/), June 8, 2026.
+[^3]: Google Cloud, [Announcing the 2025 DORA Report](https://cloud.google.com/blog/products/ai-machine-learning/announcing-the-2025-dora-report), September 23, 2025.
+[^4]: Jesse Welch, Duolingo Engineering, [Building an AI agent to remove feature flags](https://blog.duolingo.com/buildingaiagents), December 4, 2025.

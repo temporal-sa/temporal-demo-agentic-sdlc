@@ -55,13 +55,18 @@ and what changed. Its required check holds the PR until it's done.
 
 ## Identify pain (in their words)
 
+Checked on 2026-10-30. The README, the console's story acts and the deck cite these and nothing
+else.
+
 | Pain | Their words | Source |
 |---|---|---|
+| Agents now write much of the code | "By September 2026, more than 40% of pull requests on GitHub started with an agent's first draft, up from 17% in March." | [GitHub Octoverse, Oct 28 2026][octoverse] |
 | Faster coding didn't speed up delivery | "Coding may improve by 30% to 40%, but if planning, testing, and release remain manual, overall team productivity often increases by less than 10%." | [Forrester, Diego Lo Giudice, June 8 2026][forrester] |
-| The bottleneck moved | "The new bottleneck is shifting from code generation to review, quality, governance, and architecture." | [Ciklum, Julian Beckers, July 12 2026][ciklum] |
+| Speed without stability | AI adoption has "a positive relationship" with delivery throughput and "does continue to have a negative relationship with software delivery stability." 90% of respondents use AI at work. | [DORA 2025, Google Cloud, Sept 23 2025][dora] |
 | Agents crash and hang | "Even a well prompted agent may go off the rails and crash, fail to produce any changes, hang/freeze, or otherwise fail to complete, and need to be retried." | [Duolingo Engineering, Jesse Welch, Dec 4 2025][duolingo] |
-| Parallel agents multiply cost | "Four agents in parallel is four times the burn." | [KanBots][kanbots] |
-| State loss, rate limits, governance | "Hallucinations on edge cases, multi-step workflows that lose state, rate limits that spike costs, and security risks and governance failures as agents proliferate." | [Veza Digital, Matt Biggin, April 17 2026][veza] |
+| Output needs review | "AI solutions that are almost right, but not quite" is the top frustration (66%). More developers distrust AI accuracy (46%) than trust it (33%). | [Stack Overflow Developer Survey 2025][stackoverflow] |
+| Humans stay accountable | "Humans stay accountable, but AI does more of the execution." | [Forrester][forrester] |
+| Autonomy set per stage | "A deploy agent might run free in staging but need approval in production, or run on its own at noon but check with a human at 3 a.m." | [Port, Zohar Einy][port] |
 | Speed without a way back | "An ungoverned one makes change failure rate and MTTR worse, because nothing is there to catch a bad change before it spreads." | [Port, Zohar Einy][port] |
 | No audit trail | "What you get is agent sprawl: agents taking destructive actions with no audit trail, no respect for PII, and no scoped credentials." | [Port][port] |
 
@@ -81,8 +86,14 @@ and what changed. Its required check holds the PR until it's done.
 
 Only cited figures appear on slides and in the console's story acts:
 
-- Coding +30–40%, team productivity often under +10% while planning, testing and release stay manual ([Forrester][forrester]).
-- Roughly 84–90% of developers use AI tools for coding; about 13% of teams have AI operating across the full lifecycle ([Keyhole Software, Sept 2 2026][keyhole], which cites Gartner, DORA and others side by side).
+- Over 40% of pull requests on GitHub in September 2026 started with an agent's draft, up from
+  17% in March ([GitHub Octoverse][octoverse]).
+- Coding +30–40%, team productivity often under +10% while planning, testing and release stay
+  manual ([Forrester][forrester]).
+- 90% of respondents use AI at work; adoption raises throughput and still hurts delivery
+  stability ([DORA 2025][dora]).
+- 84% of developers use or plan to use AI tools; 66% name "almost right, but not quite" output as
+  their top frustration ([Stack Overflow 2025][stackoverflow]).
 
 Live numbers in the console come from the running system and are labeled: tokens, estimated
 model cost (from the genai-prices database, not a provider bill), attempts and time waiting.
@@ -93,6 +104,12 @@ model cost (from the genai-prices database, not a provider bill), attempts and t
   Temporal, but we found no primary source tying Codex to it, and the press release we tried to
   check refused automated access.
 - Any company's AI budget story or funding figure we couldn't read in a primary source.
+- That about 13% of teams run AI across the full lifecycle. Keyhole Software's September 2026
+  roundup gives the figure, attributed to Gartner, DORA and a DEV Community post together, and we
+  couldn't trace it to one primary source.
+- The Harvard and Jellyfish study of about 700 firms (30% more code, no more finished issues,
+  merge time up 49%). It fits the "faster coding, same delivery" pain, but as of 2026-10-30 we
+  found only coverage of it, not the paper.
 
 ## The acts
 
@@ -111,10 +128,9 @@ service Temporal using the Codex CLI, a pattern we intend to extend to future ag
 agent clones the repo, runs Codex CLI, and opens a PR, and Temporal retries the runs that "go off
 the rails" ([Duolingo Engineering][duolingo]).
 
+[octoverse]: https://github.blog/news-insights/octoverse/octoverse-commits-pushes-reach-new-highs-in-2026-as-developers-build-with-agents/
+[dora]: https://cloud.google.com/blog/products/ai-machine-learning/announcing-the-2025-dora-report
+[stackoverflow]: https://survey.stackoverflow.co/2025/ai
 [forrester]: https://www.forrester.com/blogs/agentic-software-development-takes-the-lead-from-code-assistants-to-orchestrated-sdlc-agents/
-[keyhole]: https://keyholesoftware.com/agentic-ai-in-the-software-development-lifecycle-2026-adoption-and-impact-data/
-[ciklum]: https://www.ciklum.com/blog/ai-revolutionize-software-development-lifecycle/
 [duolingo]: https://blog.duolingo.com/buildingaiagents
-[kanbots]: https://kanbots.dev/learn/parallelize-ai-coding-agents
-[veza]: https://vezadigital.com/post/best-ai-agents
 [port]: https://www.port.io/blog/agentic-sdlc-software-lifecycle-rebuilt-around-agents

@@ -57,15 +57,14 @@ SANS = "Inter"
 MONO = "Noto Sans Mono"
 
 SOURCES = {
+    "octoverse": ("GitHub, “Octoverse 2026”, Oct 28 2026",
+                  "github.blog/news-insights/octoverse/octoverse-commits-pushes-reach-new-highs-in-2026-as-developers-build-with-agents"),
     "forrester": ("Diego Lo Giudice, Forrester, “Agentic Software Development Takes The Lead”, June 8 2026",
                   "forrester.com/blogs/agentic-software-development-takes-the-lead-from-code-assistants-to-orchestrated-sdlc-agents"),
-    "keyhole": ("Keyhole Software, “Agentic AI in the SDLC: 2026 adoption and impact data”, Sept 2 2026",
-                "keyholesoftware.com/agentic-ai-in-the-software-development-lifecycle-2026-adoption-and-impact-data"),
-    "ciklum": ("Julian Beckers, Ciklum, “The Agentic SDLC”, July 12 2026", "ciklum.com/blog/ai-revolutionize-software-development-lifecycle"),
+    "dora": ("Google Cloud, “Announcing the 2025 DORA Report” (State of AI-assisted Software Development), Sept 23 2025",
+             "cloud.google.com/blog/products/ai-machine-learning/announcing-the-2025-dora-report"),
     "duolingo": ("Jesse Welch, Duolingo Engineering, “Building AI agents”, Dec 4 2025", "blog.duolingo.com/buildingaiagents"),
     "port": ("Zohar Einy, Port, “The agentic SDLC”, 2026", "port.io/blog/agentic-sdlc-software-lifecycle-rebuilt-around-agents"),
-    "kanbots": ("KanBots, “Parallelize AI coding agents”", "kanbots.dev/learn/parallelize-ai-coding-agents"),
-    "veza": ("Matt Biggin, Veza Digital, “Best AI agents”, April 17 2026", "vezadigital.com/post/best-ai-agents"),
 }
 
 
@@ -227,7 +226,19 @@ I approved two things: the plan, and the release. Everything else, the agents di
 So why isn't everyone doing this already?
 """)
 
-    # 3. Big number: Forrester
+    # 3. Big number: agents write the code
+    s = d.slide()
+    d.text(s, 0, int(1.0 * IN), W, int(1.5 * IN), "17% → over 40%", size=60, color=GREEN, align=PP_ALIGN.CENTER, light=True)
+    d.text(s, int(1.2 * IN), int(2.7 * IN), int(7.6 * IN), int(1.0 * IN),
+           "“By September 2026, more than 40% of pull requests on GitHub started with an agent's first draft, up from 17% in March.”",
+           size=15, color=WHITE, align=PP_ALIGN.CENTER, light=True)
+    d.source(s, "octoverse", y=int(4.6 * IN))
+    d.notes(s, """
+Start with where the code comes from now. GitHub's Octoverse report, out this week: in March, seventeen percent of pull requests started with an agent's draft.
+By September it was over forty percent. That's six months.
+""")
+
+    # 4. Big number: Forrester
     s = d.slide()
     d.text(s, 0, int(1.0 * IN), W, int(1.5 * IN), "30–40% → under 10%", size=60, color=GREEN, align=PP_ALIGN.CENTER, light=True)
     d.text(s, int(1.2 * IN), int(2.7 * IN), int(7.6 * IN), int(1.0 * IN),
@@ -235,32 +246,23 @@ So why isn't everyone doing this already?
            size=15, color=WHITE, align=PP_ALIGN.CENTER, light=True)
     d.source(s, "forrester", y=int(4.6 * IN))
     d.notes(s, """
-Here's the problem in one line, from Forrester this June. AI made coding thirty to forty percent faster.
+And here's the problem in one line, from Forrester this June. AI made coding thirty to forty percent faster.
 But when planning, testing and release stay manual, the team as a whole gets less than ten percent faster.
 Coding was never the whole job.
 """)
 
-    # 4. Big number: adoption gap
-    s = d.slide()
-    d.text(s, 0, int(1.0 * IN), W, int(1.5 * IN), "84–90% vs 13%", size=60, color=GREEN, align=PP_ALIGN.CENTER, light=True)
-    d.text(s, int(1.2 * IN), int(2.7 * IN), int(7.6 * IN), int(1.0 * IN),
-           "Roughly 84–90% of developers use AI tools for coding, but only about 13% of teams have AI operating across the full development lifecycle.",
-           size=15, align=PP_ALIGN.CENTER, light=True)
-    d.source(s, "keyhole", y=int(4.6 * IN))
-    d.notes(s, """
-And almost nobody has crossed that gap. Most developers now use AI to write code. About one team in eight has it working across the whole lifecycle.
-Keyhole pulled these numbers from Gartner, DORA and others; treat them as a range, but the gap is the point.
-""")
-
-    # 5. Statement
+    # 5. Statement: DORA
     s = d.slide()
     d.text(s, int(1.0 * IN), int(1.6 * IN), int(8.0 * IN), int(1.4 * IN),
-           "The bottleneck moved from writing code to everything after it.", size=30, align=PP_ALIGN.CENTER, light=True)
-    d.text(s, int(1.5 * IN), int(3.2 * IN), int(7.0 * IN), int(0.6 * IN),
-           "“The new bottleneck is shifting from code generation to review, quality, governance, and architecture.”",
+           "Teams ship faster with AI, and less safely.", size=30, align=PP_ALIGN.CENTER, light=True)
+    d.text(s, int(1.5 * IN), int(3.2 * IN), int(7.0 * IN), int(0.8 * IN),
+           "90% of respondents use AI at work. AI adoption now raises delivery throughput, and it “does continue to have a negative relationship with software delivery stability.”",
            size=12, color=INDIGO, align=PP_ALIGN.CENTER)
-    d.source(s, "ciklum", y=int(4.6 * IN))
-    d.notes(s, "Review, testing, release, operations. That's where the time goes now, and that's what agentic SDLC is about.")
+    d.source(s, "dora", y=int(4.6 * IN))
+    d.notes(s, """
+DORA surveyed nearly five thousand people for the 2025 report. Ninety percent use AI at work. For the first time, AI adoption came with higher throughput.
+It also still came with lower stability. More changes go out, and more of them have to come back. Review, testing, release and rollback are where the time goes now, and that's what agentic SDLC is about.
+""")
 
     # 6. The lifecycle
     s = d.slide()

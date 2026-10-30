@@ -53,7 +53,7 @@ Keys: **1–6** switch acts, **N** starts a scenario.
 
 **Do:** press **2**, then **3**.
 
-**The audience sees** three cited figures (coding +30–40% but team productivity under +10%; 84–90% of developers use AI tools but about 13% of teams run it across the lifecycle; the bottleneck moving to review and governance), then the seven criteria, each with the pain in someone's words.
+**The audience sees** three cited figures (agent-drafted pull requests on GitHub up from 17% to over 40% in six months; coding +30–40% but team productivity under +10%; AI adoption raising throughput and still lowering delivery stability), then the seven criteria, each with the pain in someone's words.
 
 **Say:** "Agents across the lifecycle fail the way distributed systems fail. They crash, they wait on people, they run in parallel, they hit rate limits, and they ship bad changes. Those seven cards are what you'd need proven before trusting them. Let's prove them."
 
