@@ -134,7 +134,12 @@ SUPERVISOR_URL = os.environ.get("SUPERVISOR_URL", "")
 def temporal_ui_url(namespace: str) -> str:
     """Base URL for this namespace in the Temporal UI, for links from the demo view."""
     if url := os.environ.get("TEMPORAL_UI_URL"):
-        return url.rstrip("/")
+        url = url.rstrip("/")
+        if "/namespaces/" in url:
+            return url  # already a namespace page (docker-compose, older CRs)
+        # tmprl-demo.cloud injects the UI base plus TEMPORAL_UI_NAMESPACE (the qualified Cloud
+        # namespace, or a crashable workspace's dev server namespace under its /_temporal).
+        return f"{url}/namespaces/{os.environ.get('TEMPORAL_UI_NAMESPACE') or namespace}"
     if os.environ.get("TEMPORAL_ADDRESS", "").endswith(".tmprl.cloud:7233"):
         return f"https://cloud.temporal.io/namespaces/{namespace}"
     return f"http://localhost:8233/namespaces/{namespace}"
