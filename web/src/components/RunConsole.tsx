@@ -392,8 +392,9 @@ function AgentCard({ agentId, role, model, feed, retry, faults, closed, onError,
       )}
       <ol className="tool-log">
         {(feed?.tools ?? []).slice(-6).map((t) => (
-          <li key={t.id} data-status={t.status === "done" ? "completed" : t.status === "error" ? "failed" : t.status === "awaiting" ? "waiting" : "active"}>
-            <span className="status-dot" /><code>{t.name}</code><span className="muted">{t.input}</span>
+          <li key={t.id} title={t.result || undefined} data-status={t.status === "done" ? "completed" : t.status === "error" ? "failed" : t.status === "awaiting" ? "waiting" : "active"}>
+            {/* A failed call shows why in place of its input; any result is on hover. */}
+            <span className="status-dot" /><code>{t.name}</code><span className="muted">{t.status === "error" && t.result ? t.result : t.input}</span>
           </li>
         ))}
       </ol>
