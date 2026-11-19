@@ -24,6 +24,12 @@ function emptyFeed(id: string): AgentFeed {
   return { id, modelCalls: 0, inTokens: 0, outTokens: 0, thinking: false, replyTail: "", tools: [], approvals: [], lastAt: 0 };
 }
 
+// A tool's result arrives as JSON: a string as itself, anything else as compact JSON.
+function describeOutput(output: unknown): string {
+  if (output === undefined || output === null) return "";
+  return typeof output === "string" ? output : JSON.stringify(output);
+}
+
 function describeInput(input: Record<string, unknown> | undefined): string {
   if (!input) return "";
   const path = input.path ?? input.pattern ?? input.command;
@@ -68,10 +74,10 @@ function reduceFeeds(feeds: Feeds, event: AgentEvent | "reset"): Feeds {
       feed.tools = feed.tools.map((t) => (t.id === id && t.status === "awaiting" ? { ...t, status: "running" } : t));
       break;
     case "tool_end":
-      feed.tools = feed.tools.map((t) => (t.id === id ? { ...t, status: "done", result: String(event.output ?? "").slice(0, 160) } : t));
+      feed.tools = feed.tools.map((t) => (t.id === id ? { ...t, status: "done", result: describeOutput(event.tool_output).slice(0, 160) } : t));
       break;
     case "tool_error":
-      feed.tools = feed.tools.map((t) => (t.id === id ? { ...t, status: "error", result: String(event.error ?? "") } : t));
+      feed.tools = feed.tools.map((t) => (t.id === id ? { ...t, status: "error", result: event.message ?? "" } : t));
       break;
   }
   return { ...feeds, [event.agent_workflow_id]: feed };
