@@ -127,7 +127,7 @@ Open the console at http://localhost:8000 and the Temporal UI at http://localhos
 
 ## Notes
 
-- **Temporal Agent Kit 0.12.1** from PyPI (`temporal-agent-kit[pydantic-ai]`). `agents/kit_ext.py` holds the few workarounds it needs with Pydantic AI 2.53's `TemporalAgent`, each commented with why.
+- **Temporal Agent Kit 0.12.1** from PyPI (`temporal-agent-kit[pydantic-ai]`). The agents use its `TemporalAgentKitDurability` capability on Pydantic AI 2.71 (`agents/runtime.py`); `agents/kit_ext.py` holds the demo's model wrapper (faults, rejected requests) and the few library workarounds, each commented with why.
 - **Both pipeline versions run all the time,** one worker each, and the console makes one current through Temporal's Worker Deployment API (the pizza Worker Versioning demo's approach), so the rollout works live in the catalog. The v2 pipeline is the same code with `PIPELINE_VERSION=v2`. Each Worker Deployment Version always runs with one value, so a Pinned run replays against the path it started on. In a real project v2 would be the next commit.
 - **Agents never wait for tool approvals.** Every tool call is auto-approved, since nobody could approve one from GitHub; people gate the plan, the merge and the release instead.
 - **Agent-written tests** run in the worker with a clean environment and a timeout, not in an isolated sandbox. See [docs/catalog.md](docs/catalog.md).

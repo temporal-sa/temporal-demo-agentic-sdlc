@@ -1,4 +1,4 @@
-"""Small gap-fillers for Temporal Agent Kit 0.12.1 and Pydantic AI 2.53.
+"""Small gap-fillers for Temporal Agent Kit 0.12.1 and Pydantic AI 2.71.
 
 Every workaround for a library gap lives here, each with the reason, so an upgrade has one
 file to re-check. The patterns come from temporal-demo-advanced-ai-agent's harness_ext.py.
@@ -7,14 +7,13 @@ file to re-check. The patterns come from temporal-demo-advanced-ai-agent's harne
 from __future__ import annotations
 
 import asyncio
-import dataclasses
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
 from pydantic_ai import FunctionToolset, Tool
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import AgentStreamEvent, ModelMessage, ModelResponse
+from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
@@ -22,11 +21,7 @@ from pydantic_ai.tools import RunContext
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from temporal_agent_kit.ai_sdks.pydantic_ai import (
-    KitDeps,
-    PydanticAIStreamObserver,
-    _resolve_stream_context,  # reads the turn context off deps, typed or dict
-)
+from temporal_agent_kit.ai_sdks.pydantic_ai import KitDeps
 
 from agentic_sdlc.models import Workspace
 
@@ -41,53 +36,16 @@ class DemoDeps(KitDeps):
     workspace: Workspace | None = None
 
 
-# -- Usage: keep OpenAI and Gemini token counts ---------------------------------------------
-
-
-def _install_usage_extract_fix() -> None:
-    """``RequestUsage.extract`` builds ``cls(**usage.__dict__)`` and swallows any error, so the
-    ``output_reasoning_tokens`` field newer genai-prices returns makes every OpenAI and Gemini
-    usage come back as zero (pydantic_ai/usage.py). Keep the known fields instead."""
-    from genai_prices.data_snapshot import get_snapshot
-    from pydantic_ai.usage import RequestUsage
-
-    if getattr(RequestUsage.extract, "__demo_fix__", False):
-        return
-    known = {f.name for f in dataclasses.fields(RequestUsage)}
-    original = RequestUsage.extract.__func__
-
-    def extract(cls, data, *, provider, provider_url, provider_fallback, api_flavor="default", details=None):
-        details = dict(details or {})
-        for provider_id, api_url in [(None, provider_url), (provider, None), (provider_fallback, None)]:
-            try:
-                found = get_snapshot().find_provider(None, provider_id, api_url)
-                _ref, usage = found.extract_usage(data, api_flavor=api_flavor)
-            except Exception:  # noqa: BLE001 - same fallthrough as upstream
-                continue
-            values = {k: v for k, v in usage.__dict__.items() if v is not None}
-            if reasoning := values.pop("output_reasoning_tokens", None):
-                details.setdefault("reasoning_tokens", reasoning)
-            return cls(**{k: v for k, v in values.items() if k in known}, details=details)
-        return original(cls, data, provider=provider, provider_url=provider_url,
-                        provider_fallback=provider_fallback, api_flavor=api_flavor, details=details)
-
-    extract.__demo_fix__ = True  # type: ignore[attr-defined]
-    RequestUsage.extract = classmethod(extract)  # type: ignore[method-assign]
-
-
-_install_usage_extract_fix()
-
-
-# -- The model Activity: heartbeats, honest retries, injected rate limits --------------------
+# -- The model Activity: honest retries, injected faults ------------------------------------
 
 
 class DemoModel(WrapperModel):
-    """Wraps each provider model so its Temporal Activity heartbeats for the whole request.
+    """Wraps each provider model for the demo's faults and retry classification.
 
-    Pydantic AI's model Activity has no heartbeat, so a worker that dies mid-call would only be
-    noticed at the start-to-close timeout. A background heartbeat lets a 10 s heartbeat timeout
-    catch it and retry on another worker. Provider 4xx errors other than 408/409/429 are
-    non-retryable: a bad request won't succeed on attempt two.
+    Faults armed from the console fail an attempt as the provider would. Provider 4xx errors
+    other than 408/409/429 are non-retryable: a bad request won't succeed on attempt two.
+    Heartbeats come from Pydantic AI's ``TemporalDurability``, which beats every model Activity
+    at half its heartbeat timeout (runtime.MODEL_ACTIVITY sets 10 s).
     """
 
     async def request(
@@ -97,13 +55,12 @@ class DemoModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         await _maybe_inject_failure(self.wrapped)
-        async with heartbeating():
-            try:
-                return await super().request(messages, model_settings, model_request_parameters)
-            except ModelHTTPError as exc:
-                if (rejected := _rejected(exc)) is None:
-                    raise
-                raise rejected from exc
+        try:
+            return await super().request(messages, model_settings, model_request_parameters)
+        except ModelHTTPError as exc:
+            if (rejected := _rejected(exc)) is None:
+                raise
+            raise rejected from exc
 
     @asynccontextmanager
     async def request_stream(
@@ -114,16 +71,15 @@ class DemoModel(WrapperModel):
         run_context: RunContext[Any] | None = None,
     ) -> AsyncIterator[StreamedResponse]:
         await _maybe_inject_failure(self.wrapped)
-        async with heartbeating():
-            try:
-                async with self.wrapped.request_stream(
-                    messages, model_settings, model_request_parameters, run_context
-                ) as response:
-                    yield response
-            except ModelHTTPError as exc:
-                if (rejected := _rejected(exc)) is None:
-                    raise
-                raise rejected from exc
+        try:
+            async with self.wrapped.request_stream(
+                messages, model_settings, model_request_parameters, run_context
+            ) as response:
+                yield response
+        except ModelHTTPError as exc:
+            if (rejected := _rejected(exc)) is None:
+                raise
+            raise rejected from exc
 
 
 PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}
@@ -170,8 +126,13 @@ def _rejected(exc: ModelHTTPError) -> ApplicationError | None:
     return None
 
 
+# -- Tool Activities: heartbeats ------------------------------------------------------------
+
+
 @asynccontextmanager
 async def heartbeating() -> AsyncIterator[None]:
+    """Heartbeat while a tool body runs (tools.py). The kit's activity tools don't heartbeat on
+    their own, so without this a worker that dies mid-tool is only noticed at the timeout."""
     if not activity.in_activity():
         yield
         return
@@ -188,41 +149,16 @@ async def heartbeating() -> AsyncIterator[None]:
         ticker.cancel()
 
 
-# -- Streaming handler with working usage ----------------------------------------------------
-
-
-async def event_stream_handler(ctx: RunContext[Any], stream: AsyncIterable[AgentStreamEvent]) -> None:
-    """Publishes each model call's events to the agent's turn stream, for ``TemporalAgent``.
-
-    The kit's own ``kit_event_stream_handler`` only feeds an observer that its
-    ``TemporalAgentKitDurability`` capability opens around the model call; with ``TemporalAgent``
-    nothing opens one and every event would be dropped. So this opens the observer itself and
-    reads ``usage`` as the property it is in Pydantic AI 2.53."""
-    context = _resolve_stream_context(ctx)
-    if context is None or not isinstance(stream, StreamedResponse):
-        async for _ in stream:
-            pass
-        return
-    async with PydanticAIStreamObserver(context, model=getattr(stream, "model_name", None)) as observer:
-        async for event in stream:
-            await observer.on_event(event)
-        usage = stream.usage
-        observer.set_usage(usage() if callable(usage) else usage)
-
-
 # -- Workspace tools: inject the run's branch per call -------------------------------------
 
 
-def workspace_toolset(
-    tools: Sequence[Callable[..., Awaitable[Any]]], *, id: str
-) -> tuple[FunctionToolset[Any], dict[str, dict[str, Any]]]:
+def workspace_toolset(tools: Sequence[Callable[..., Awaitable[Any]]], *, id: str) -> FunctionToolset[Any]:
     """Like the kit's ``build_kit_toolset``, but the ``workspace`` injection comes from
     each run's deps rather than being fixed when the module loads. One module-level agent
-    then serves every branch. The returned config runs the tools in the Workflow, where the
+    then serves every branch. ``temporal: False`` keeps the tools in the Workflow, where the
     kit applies the approval policy and dispatches activity-backed tools.
     """
-    adapted = [_workspace_tool(tool) for tool in tools]
-    return FunctionToolset(adapted, id=id), {id: {tool.name: False for tool in adapted}}
+    return FunctionToolset([_workspace_tool(tool) for tool in tools], id=id, metadata={"temporal": False})
 
 
 def _workspace_tool(tool_callable: Callable[..., Awaitable[Any]]) -> Tool[Any]:
