@@ -1,12 +1,12 @@
 """The tools coding agents use, backed by a git branch.
 
-Each tool is a harness activity tool: the approval policy runs in the agent's Workflow and the
+Each tool is an Agent Kit activity tool: the approval policy runs in the agent's Workflow and the
 body runs as an Activity on any worker. The branch is the durable workspace. Every write is
 committed and pushed before the tool returns, and every tool first brings the local checkout
 up to the branch head, so a replacement worker continues exactly where a dead one stopped.
 The local checkout is only a cache.
 
-``workspace`` is injected per run from the agent's deps (harness_ext.workspace_toolset); the
+``workspace`` is injected per run from the agent's deps (kit_ext.workspace_toolset); the
 model never sees it and can't point a tool at another branch.
 """
 
@@ -26,11 +26,11 @@ from pathlib import Path
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent import Injected
+from temporal_agent_kit import agent
+from temporal_agent_kit.agent import Injected
 
 from agentic_sdlc import config
-from agentic_sdlc.agents.harness_ext import heartbeating
+from agentic_sdlc.agents.kit_ext import heartbeating
 from agentic_sdlc.models import Workspace
 
 MAX_TOOL_OUTPUT = 30_000

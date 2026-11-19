@@ -1,10 +1,10 @@
-"""The agents, each a temporal-agent-harness agent Workflow.
+"""The agents, each a Temporal Agent Kit agent Workflow.
 
 An agent is a long-lived Workflow that accepts messages (``@agent.accepts`` handlers). Its model
 calls and tool calls are Activities, so a worker crash mid-turn loses nothing that already
 finished: the turn continues on another worker from its last completed step. The pipeline
 starts one agent per role as a child Workflow and sends it messages; agent events (model
-output, tool calls, approvals) stream to the UI through Redis.
+output, tool calls, approvals) go to a Workflow Stream inside the agent, which the console reads.
 
 Versioning: a versioned worker (worker.py) runs every Workflow Pinned by default, so an agent
 finishes on the build its run started on.
@@ -13,16 +13,16 @@ finishes on the build its run started on.
 from __future__ import annotations
 
 from temporalio import workflow
+from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from pydantic_ai.usage import UsageLimits
 
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import AgentConfig, ToolApprovalPolicy
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-    from temporal_agent_harness.harness.redis_event_stream import RedisEventStream
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import AgentConfig, ToolApprovalPolicy
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
-    from agentic_sdlc.agents.harness_ext import DemoDeps
+    from agentic_sdlc.agents.kit_ext import DemoDeps
     from agentic_sdlc.agents.registry import settings_for
     from agentic_sdlc.agents.runtime import CODER, DIAGNOSE_INSTRUCTIONS, PLANNER, REVIEWER, SECURITY_REVIEWER
     from agentic_sdlc.models import (
@@ -82,12 +82,12 @@ def usage_of(result, model_key: str) -> Usage:
 
 
 class _AgentBase:
-    def _setup(self, config: AgentConfig, data: AgentInit) -> None:
+    def _setup(self, config: AgentConfig, data: AgentInit, stream: WorkflowStream) -> None:
         self._init = data
         self._history = []
         self._runner = AgentWorkflowRunner(
             config,
-            stream=RedisEventStream(),
+            stream=stream,
             approval_policy_default=approval_policy(data.autonomy),
         )
 
@@ -99,7 +99,8 @@ class _AgentBase:
 class PlannerAgent(_AgentBase):
     @agent.init
     def __init__(self, config: AgentConfig, data: AgentInit) -> None:
-        self._setup(config, data)
+        # The stream must be built in the init method itself (temporalio checks the caller).
+        self._setup(config, data, WorkflowStream())
 
     @agent.accepts
     async def clarify(self, request: PlanRequest) -> ClarifyReply:
@@ -160,7 +161,8 @@ class PlannerAgent(_AgentBase):
 class CoderAgent(_AgentBase):
     @agent.init
     def __init__(self, config: AgentConfig, data: AgentInit) -> None:
-        self._setup(config, data)
+        # The stream must be built in the init method itself (temporalio checks the caller).
+        self._setup(config, data, WorkflowStream())
 
     @agent.accepts
     async def code(self, request: CodeRequest) -> CodeReply:
@@ -214,7 +216,8 @@ class CoderAgent(_AgentBase):
 class ReviewerAgent(_AgentBase):
     @agent.init
     def __init__(self, config: AgentConfig, data: AgentInit) -> None:
-        self._setup(config, data)
+        # The stream must be built in the init method itself (temporalio checks the caller).
+        self._setup(config, data, WorkflowStream())
 
     @agent.accepts
     async def review(self, request: ReviewRequest) -> ReviewReply:

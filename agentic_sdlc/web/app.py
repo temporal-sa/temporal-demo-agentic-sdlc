@@ -2,8 +2,9 @@
 
 Runs start, and people talk to the agents, on GitHub: webhooks.py turns each delivery into a
 Workflow start or a Signal. The console only watches. It reads progress with Describe (free,
-and available while workers are down), relays agent events from Redis, and serves staging,
-production and canary storefronts from the commits the Environments Workflow records. Its only
+and available while workers are down), relays agent events from each agent's Workflow Stream,
+and serves staging, production and canary storefronts from the commits the Environments Workflow
+records. Its only
 writes are demo machinery: starting a scenario on GitHub, stopping a run, faults, rollouts, reset.
 
 It holds no LLM keys and no GitHub token; anything that writes to GitHub runs on the worker.
@@ -38,7 +39,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowUpdateFailedError
+from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.service import RPCError, RPCStatusCode
+
+from temporal_agent_kit.agent_protocol import TURN_EVENTS_TOPIC, AgentEvent
 
 from agentic_sdlc import config, faults, versions
 from agentic_sdlc.activities.github import ScenarioInput, ScenarioStarted
@@ -46,7 +50,7 @@ from agentic_sdlc.agents.registry import allowlist
 from agentic_sdlc.models import RunState
 from agentic_sdlc.pipeline.environments import EnvState, TrafficBatch
 from agentic_sdlc.slots import Slot, SlotState
-from agentic_sdlc.temporal_client import EVENT_STREAM, connect
+from agentic_sdlc.temporal_client import connect
 from agentic_sdlc.web import sessions, webhooks
 
 log = logging.getLogger(__name__)
@@ -63,6 +67,9 @@ KEEPALIVE_SECONDS = 15
 VIEW_CACHE_SECONDS = 0.9
 ENV_CACHE_SECONDS = 2.0
 TRAFFIC_FLUSH_SECONDS = 5
+# Each read of an agent's stream is an Update on that agent's Workflow, so an open console doesn't
+# poll faster than people can follow.
+AGENT_POLL_COOLDOWN = timedelta(milliseconds=250)
 SETTINGS_KEY = "run-settings:{}"  # per slot queue
 
 
@@ -360,7 +367,7 @@ def _not_found():
 @app.get("/api/runs/{run_id}/stream")
 async def run_stream(run_id: str, request: Request, ctx: Ctx = Depends(context)):
     """One SSE stream per run view: run snapshots when they change, plus every agent's
-    events (model calls, tool calls, approvals) relayed from Redis."""
+    events (model calls, tool calls, approvals) read from its Workflow Stream."""
     if ctx.lease is None:
         _not_found()
     queue = ctx.lease.queue
@@ -387,14 +394,22 @@ async def run_stream(run_id: str, request: Request, ctx: Ctx = Depends(context))
             await asyncio.sleep(1.0)
 
     async def agent_events(agent_id: str):
-        async for stored in EVENT_STREAM.subscribe(state.temporal, agent_id, from_offset=0):
-            event = stored.data
-            payload = _trim(event.event.model_dump(mode="json"))
-            if payload.get("type") in _QUIET_EVENTS:
-                continue
-            await outbox.put(_sse("agent", json.dumps({
-                "agent_workflow_id": agent_id, "offset": stored.offset, "timestamp": event.timestamp, **payload,
-            })))
+        stream = WorkflowStreamClient.create(state.temporal, agent_id)
+        try:
+            async for stored in stream.subscribe(TURN_EVENTS_TOPIC, from_offset=0, result_type=AgentEvent,
+                                                 poll_cooldown=AGENT_POLL_COOLDOWN):
+                event: AgentEvent = stored.data
+                payload = _trim(event.event.model_dump(mode="json"))
+                if payload.get("type") in _QUIET_EVENTS:
+                    continue
+                await outbox.put(_sse("agent", json.dumps({
+                    "agent_workflow_id": agent_id, "offset": stored.offset, "timestamp": event.timestamp, **payload,
+                })))
+        except (RPCError, WorkflowUpdateFailedError) as err:
+            # A closed agent's remaining events are read with a Query, which needs a Worker; while
+            # the slot is crashed there is none. An agent from a build before Agent Kit 0.12.1 has
+            # no stream to read. The run view still shows the agent's results either way.
+            log.warning("Stopped reading %s's events: %s", agent_id, err)
 
     tasks: list[asyncio.Task] = [asyncio.create_task(snapshots())]
 

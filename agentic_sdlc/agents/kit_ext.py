@@ -1,4 +1,4 @@
-"""Small gap-fillers for temporal-agent-harness (temporal-sa fork @ f12f194) and Pydantic AI 2.53.
+"""Small gap-fillers for Temporal Agent Kit 0.12.1 and Pydantic AI 2.53.
 
 Every workaround for a library gap lives here, each with the reason, so an upgrade has one
 file to re-check. The patterns come from temporal-demo-advanced-ai-agent's harness_ext.py.
@@ -22,8 +22,8 @@ from pydantic_ai.tools import RunContext
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from temporal_agent_harness.ai_sdks.pydantic_ai_harness import (
-    HarnessDeps,
+from temporal_agent_kit.ai_sdks.pydantic_ai import (
+    KitDeps,
     PydanticAIStreamObserver,
     _resolve_stream_context,  # reads the turn context off deps, typed or dict
 )
@@ -34,8 +34,8 @@ HEARTBEAT_EVERY_SECONDS = 2.0
 _RETRYABLE_4XX = {408, 409, 429}
 
 
-class DemoDeps(HarnessDeps):
-    """Run deps: the harness runner (from HarnessDeps) plus the branch this agent works on,
+class DemoDeps(KitDeps):
+    """Run deps: the kit's runner (from KitDeps) plus the branch this agent works on,
     which the workspace tools receive as an injected parameter the model never sees."""
 
     workspace: Workspace | None = None
@@ -185,9 +185,12 @@ async def heartbeating() -> AsyncIterator[None]:
 
 
 async def event_stream_handler(ctx: RunContext[Any], stream: AsyncIterable[AgentStreamEvent]) -> None:
-    """The harness's handler, except it reads ``usage`` as the property it is in Pydantic AI
-    2.53. The harness calls ``stream.usage()``, which raises and is swallowed, so every
-    ``model_interaction_ended`` would go out without token counts."""
+    """Publishes each model call's events to the agent's turn stream, for ``TemporalAgent``.
+
+    The kit's own ``kit_event_stream_handler`` only feeds an observer that its
+    ``TemporalAgentKitDurability`` capability opens around the model call; with ``TemporalAgent``
+    nothing opens one and every event would be dropped. So this opens the observer itself and
+    reads ``usage`` as the property it is in Pydantic AI 2.53."""
     context = _resolve_stream_context(ctx)
     if context is None or not isinstance(stream, StreamedResponse):
         async for _ in stream:
@@ -206,10 +209,10 @@ async def event_stream_handler(ctx: RunContext[Any], stream: AsyncIterable[Agent
 def workspace_toolset(
     tools: Sequence[Callable[..., Awaitable[Any]]], *, id: str
 ) -> tuple[FunctionToolset[Any], dict[str, dict[str, Any]]]:
-    """Like the harness's ``build_harness_toolset``, but the ``workspace`` injection comes from
+    """Like the kit's ``build_kit_toolset``, but the ``workspace`` injection comes from
     each run's deps rather than being fixed when the module loads. One module-level agent
     then serves every branch. The returned config runs the tools in the Workflow, where the
-    harness applies the approval policy and dispatches activity-backed tools.
+    kit applies the approval policy and dispatches activity-backed tools.
     """
     adapted = [_workspace_tool(tool) for tool in tools]
     return FunctionToolset(adapted, id=id), {id: {tool.name: False for tool in adapted}}

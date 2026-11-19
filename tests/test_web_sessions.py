@@ -2,7 +2,7 @@
 
 Each browser is an HTTP client with its own cookie jar, talking to the real app. Behind it are a
 real Temporal server, a real Redis and the real Slot Workflow and reset Activity; only GitHub and
-the pipeline Workers are fakes. What's under test is isolation: a browser sees, changes and
+the pipeline Workers are fakes (the agent-events test runs a real agent on a fake model). What's under test is isolation: a browser sees, changes and
 crashes only the slot it holds, and polling never keeps a slot alive.
 """
 
@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import shutil
 import socket
 import subprocess
 import time
 import uuid
 from collections import Counter
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -320,3 +322,112 @@ async def test_the_storefront_only_serves_this_copys_slots(demo):
     async with browser() as anyone:
         assert (await anyone.get("/apps/other-copy--s01/prod/")).status_code == 404
         assert (await anyone.get("/apps/agentic-sdlc/prod/")).status_code == 404  # not a slot queue
+
+
+# -- Agent events --------------------------------------------------------------------------
+
+
+async def _fake_model_stream(_messages, _info):
+    """A model that streams a sentence, then answers through Pydantic AI's output tool."""
+    from pydantic_ai.models.function import DeltaToolCall
+
+    for chunk in ("Reading the issue. ", "Nothing is ", "left open."):
+        yield chunk
+    yield {0: DeltaToolCall(name="final_result", json_args='{"questions": []}')}
+
+
+def _real_agents_on_a_fake_model(monkeypatch):
+    """The real agent Workflows and Pydantic AI agents, with one fake model in the registry
+    instead of the provider models (which need API keys). The registry is built when
+    agents.runtime is first imported, so nothing may import it before this."""
+    import sys
+
+    from pydantic_ai.models.function import FunctionModel
+
+    from agentic_sdlc.agents import kit_ext, registry
+
+    assert "agentic_sdlc.agents.runtime" not in sys.modules, "agents.runtime was imported before its registry was faked"
+    monkeypatch.setattr(registry, "build_registry",
+                        lambda: {"google:fake": kit_ext.DemoModel(FunctionModel(stream_function=_fake_model_stream))})
+    from agentic_sdlc.agents import runtime, workflows
+
+    return runtime, workflows
+
+
+async def test_an_agents_events_stream_to_the_console_from_its_workflow(demo, monkeypatch):
+    """A real agent turn, sent the way the pipeline sends it (the agent-turn Activity): its model
+    output reaches the run's SSE stream, read from the agent Workflow's own stream, the Activity
+    gets the agent's answer from that stream, and Redis holds none of it."""
+    import uvicorn
+    from pydantic_ai.durable_exec.temporal import AgentPlugin
+    from temporal_agent_kit.agent_protocol import AgentConfig
+
+    from agentic_sdlc.activities.agent_turn import AgentTurn, AgentTurnActivities, AgentTurnResult
+    from agentic_sdlc.agents.tools import ALL_TOOLS
+    from agentic_sdlc.models import AgentInit, AgentRef, ModelChoice, PlanRequest
+    from agentic_sdlc.temporal_client import connect
+
+    runtime, workflows = _real_agents_on_a_fake_model(monkeypatch)
+    client, _fakes, copy = demo
+    monkeypatch.setenv("TEMPORAL_ADDRESS", client.service_client.config.target_host)
+    agent_client = await connect(tools=ALL_TOOLS)
+    agent_queue = f"{copy}-agents"
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, lifespan="off", log_level="warning"))
+    serving = asyncio.create_task(server.serve())
+    events: list[dict] = []
+
+    async def read_stream(maya: httpx.AsyncClient) -> None:
+        async with maya.stream("GET", "/api/runs/issue-7/stream") as response:
+            kind = None
+            async for line in response.aiter_lines():
+                if line.startswith("event: "):
+                    kind = line.removeprefix("event: ")
+                elif line.startswith("data: ") and kind == "agent":
+                    events.append(json.loads(line.removeprefix("data: ")))
+
+    try:
+        await until(lambda: _true(server.started))
+        async with (
+            Worker(agent_client, task_queue=agent_queue, workflows=[workflows.PlannerAgent],
+                   activities=AgentTurnActivities(agent_client).activities(),
+                   plugins=[AgentPlugin(agent) for agent in runtime.ALL_AGENTS], workflow_runner=workflow_runner()),
+            httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=None) as maya,
+        ):
+            assert (await start_scenario(maya)).status_code == 200
+            mine = config.slot_queue(1, copy)
+            agent_id = f"{mine}.gh.issue-7.planner"
+            await agent_client.start_workflow(
+                "PlannerAgent", args=[AgentConfig(), AgentInit(run_id="issue-7", model=ModelChoice(provider="google", model="fake"))],
+                id=agent_id, task_queue=agent_queue)
+            run = RunState(run_id="issue-7", kind="issue", version="", title="Free shipping", budget_usd=3.0,
+                           started_at=time.time(), steps=[],
+                           agents=[AgentRef(role="planner", workflow_id=agent_id, model="google:fake")])
+            await client.start_workflow("IssueToProduction", RunRequest(run_id="issue-7", kind="issue", repo="x",
+                                                                        title="Free shipping", body=""),
+                                        id=f"{mine}.gh.issue-7", task_queue=mine, memo={"run": run.model_dump(mode="json")})
+            reading = asyncio.create_task(read_stream(maya))
+
+            turn = await agent_client.execute_activity(
+                "run_agent_turn",
+                AgentTurn(workflow_id=agent_id, handler="clarify", update_id=f"{agent_id}:clarify:1",
+                          payload=PlanRequest(issue_title="Free shipping", issue_body="Over $75").model_dump(mode="json")),
+                id=f"{agent_id}-turn-1", task_queue=agent_queue, result_type=AgentTurnResult,
+                schedule_to_close_timeout=timedelta(seconds=60))
+            assert turn.output["clarification"] == {"questions": []}
+            assert turn.stats.model_calls == 1
+
+            await until(lambda: _true(any(e["type"] == "turn_end" for e in events)))
+            reading.cancel()
+            types = [e["type"] for e in events]
+            assert {"model_interaction_started", "reply_delta", "model_interaction_ended", "message_handler_end"} <= set(types)
+            assert "".join(e["text"] for e in events if e["type"] == "reply_delta") == "Reading the issue. Nothing is left open."
+            assert {e["agent_workflow_id"] for e in events} == {agent_id}
+            assert [key async for key in state.redis.scan_iter("agent-events:*")] == []
+            await agent_client.get_workflow_handle(agent_id).signal("close")
+    finally:
+        server.should_exit = True
+        await serving

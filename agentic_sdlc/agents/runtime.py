@@ -16,14 +16,14 @@ from pydantic_ai.durable_exec.temporal import TemporalAgent
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
 
-from agentic_sdlc.agents import harness_ext
+from agentic_sdlc.agents import kit_ext
 from agentic_sdlc.agents.registry import build_registry
 from agentic_sdlc.agents.tools import CODER_TOOLS, READ_ONLY_TOOLS
 from agentic_sdlc.models import Plan, Review
 
 MODELS = build_registry()
 
-# One model call per Activity. Heartbeats (harness_ext.DemoModel) notice a dead worker in
+# One model call per Activity. Heartbeats (kit_ext.DemoModel) notice a dead worker in
 # about 10 seconds, and the call is retried on another worker. Rate limits, 5xx errors and a
 # provider that is down retry with backoff (2, 4, 8, 16, then every 30 seconds) for up to half an
 # hour, so an outage ends when the provider is back and not when a retry count runs out. A
@@ -99,18 +99,18 @@ actionable comments."""
 
 
 def _agent(name: str, *, instructions: str, output_type, tools) -> TemporalAgent:
-    toolset, tool_config = harness_ext.workspace_toolset(tools, id=f"{name}-tools")
+    toolset, tool_config = kit_ext.workspace_toolset(tools, id=f"{name}-tools")
     return TemporalAgent(
         Agent(
             MODELS[next(iter(MODELS))],
             instructions=instructions,
             output_type=output_type,
-            deps_type=harness_ext.DemoDeps,
+            deps_type=kit_ext.DemoDeps,
             toolsets=[toolset],
         ),
         name=name,
         models=MODELS,
-        event_stream_handler=harness_ext.event_stream_handler,
+        event_stream_handler=kit_ext.event_stream_handler,
         model_activity_config=MODEL_ACTIVITY,
         tool_activity_config=tool_config,
     )

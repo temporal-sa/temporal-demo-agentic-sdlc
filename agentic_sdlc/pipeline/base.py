@@ -27,7 +27,7 @@ from temporalio.common import RetryPolicy, SearchAttributeKey
 from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
-    from temporal_agent_harness.harness.agent_protocol import AgentConfig
+    from temporal_agent_kit.agent_protocol import AgentConfig
 
     from agentic_sdlc import config
     from agentic_sdlc.activities.agent_turn import AgentTurn, AgentTurnActivities, AgentTurnResult

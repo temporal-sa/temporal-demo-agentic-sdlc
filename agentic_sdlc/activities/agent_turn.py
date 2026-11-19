@@ -4,23 +4,30 @@ Python Workflows can't send Updates to other Workflows, so the pipeline talks to
 through this Activity. The agent keeps running if this Activity's worker dies: the retry
 re-sends with the same update ID (Temporal returns the original acceptance instead of
 starting a second turn) and waits for the same message again.
+
+The answer comes off the agent's own event stream (a Workflow Stream inside the agent Workflow):
+the Activity reads from where its message was accepted until that message's handler ends.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 
 from pydantic import BaseModel
 from temporalio import activity
 from temporalio.client import Client
+from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
 
-from temporal_agent_harness.harness.agent_client import AgentClient
-
-from agentic_sdlc.temporal_client import EVENT_STREAM
+from temporal_agent_kit.agent_client import AgentClient
+from temporal_agent_kit.agent_protocol import TURN_EVENTS_TOPIC, AgentEvent, AgentEventType, AgentMessageReply
 
 HEARTBEAT_EVERY_SECONDS = 5
+# Every stream read is an Update on the agent Workflow. Only the reply matters here, so read
+# slowly rather than chasing every model delta.
+REPLY_POLL_COOLDOWN = timedelta(seconds=1)
 
 
 class AgentTurn(BaseModel):
@@ -61,20 +68,18 @@ class AgentTurnActivities:
 
     @activity.defn
     async def run_agent_turn(self, turn: AgentTurn) -> AgentTurnResult:
-        agent = AgentClient(self._client, turn.workflow_id, event_stream=EVENT_STREAM)
+        agent = AgentClient(self._client, turn.workflow_id)
         heartbeat = asyncio.create_task(_heartbeat())
         try:
-            reply = await agent.submit_message(turn.handler, turn.payload, update_id=turn.update_id)
-            result = await agent.await_message(reply.message_id)
+            accepted = await agent.submit_message(turn.handler, turn.payload, update_id=turn.update_id)
+            output = await await_reply(self._client, turn.workflow_id, accepted)
         finally:
             heartbeat.cancel()
-        if result.error is not None or result.output is None:
-            raise ApplicationError(f"The agent's turn failed: {result.error}", type="AgentTurnFailed")
-        usage = result.output.get("usage") or {}
+        usage = output.get("usage") or {}
         cost = estimate_cost(usage.get("model", ""), usage.get("input_tokens", 0), usage.get("output_tokens", 0))
-        result.output["usage"] = {**usage, "cost_usd": cost}
+        output["usage"] = {**usage, "cost_usd": cost}
         stats = await self._turn_stats(turn)
-        return AgentTurnResult(output=result.output, cost_usd=cost, attempt=activity.info().attempt, stats=stats)
+        return AgentTurnResult(output=output, cost_usd=cost, attempt=activity.info().attempt, stats=stats)
 
     async def _turn_stats(self, turn: AgentTurn) -> TurnStats:
         """Count this turn's model and tool calls, and the ones that needed more than one
@@ -106,6 +111,28 @@ class AgentTurnActivities:
                         last_failure=started.last_failure.message[:200],
                     ))
         return stats
+
+
+async def await_reply(
+    client: Client, workflow_id: str, accepted: AgentMessageReply, *, poll_cooldown: timedelta = REPLY_POLL_COOLDOWN
+) -> dict[str, Any]:
+    """The output of one accepted message, read from the agent's stream from where it was
+    accepted. Events are matched by the message's ID, as the kit's own subagent Activity does,
+    because another message may share the turn."""
+    stream = WorkflowStreamClient.create(client, workflow_id)
+    async for item in stream.subscribe(TURN_EVENTS_TOPIC, from_offset=accepted.accepted_offset,
+                                       result_type=AgentEvent, poll_cooldown=poll_cooldown):
+        event: AgentEvent = item.data
+        if event.turn_id != accepted.turn_id:
+            continue
+        if event.message_id == accepted.message_id:
+            if event.event.type == AgentEventType.MESSAGE_HANDLER_END:
+                return event.event.output
+            if event.event.type == AgentEventType.MESSAGE_HANDLER_ERROR:
+                raise ApplicationError(f"The agent's turn failed: {event.event.message}", type="AgentTurnFailed")
+        if event.event.type == AgentEventType.TURN_END:
+            break
+    raise ApplicationError(f"The agent's turn {accepted.turn_number} ended without a reply", type="AgentTurnFailed")
 
 
 async def _heartbeat() -> None:
