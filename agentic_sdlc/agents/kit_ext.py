@@ -101,7 +101,9 @@ class DemoModel(WrapperModel):
             try:
                 return await super().request(messages, model_settings, model_request_parameters)
             except ModelHTTPError as exc:
-                raise _classify(exc) from exc
+                if (rejected := _rejected(exc)) is None:
+                    raise
+                raise rejected from exc
 
     @asynccontextmanager
     async def request_stream(
@@ -119,7 +121,9 @@ class DemoModel(WrapperModel):
                 ) as response:
                     yield response
             except ModelHTTPError as exc:
-                raise _classify(exc) from exc
+                if (rejected := _rejected(exc)) is None:
+                    raise
+                raise rejected from exc
 
 
 PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}
@@ -152,7 +156,10 @@ async def _maybe_inject_failure(model: Any) -> None:
         )
 
 
-def _classify(exc: ModelHTTPError) -> Exception:
+def _rejected(exc: ModelHTTPError) -> ApplicationError | None:
+    """A non-retryable error for a request the provider won't accept on any attempt, or None to
+    re-raise the provider's error as it is (raising it "from" itself would make its cause chain a
+    loop, which Temporal can't encode as a failure)."""
     if 400 <= exc.status_code < 500 and exc.status_code not in _RETRYABLE_4XX:
         return ApplicationError(
             f"The model provider rejected the request ({exc.status_code}).",
@@ -160,7 +167,7 @@ def _classify(exc: ModelHTTPError) -> Exception:
             type="ProviderRejected",
             non_retryable=True,
         )
-    return exc
+    return None
 
 
 @asynccontextmanager
