@@ -13,7 +13,6 @@ import contextlib
 import json
 import shutil
 import socket
-import subprocess
 import time
 import uuid
 from collections import Counter
@@ -29,6 +28,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+import fake_model
 from agentic_sdlc import config, faults
 from agentic_sdlc.activities.github import CleanupInput, ScenarioInput, ScenarioStarted
 from agentic_sdlc.models import RunRequest, RunState
@@ -54,26 +54,6 @@ class Fakes:
         self.hosting: Counter[str] = Counter()  # slot queue -> hosted Workers
         self.scenarios: list[ScenarioInput] = []
         self.cleanups: list[CleanupInput] = []
-
-
-@pytest.fixture
-async def redis_url():
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    server = subprocess.Popen(["redis-server", "--port", str(port), "--save", "", "--appendonly", "no"],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    url = f"redis://127.0.0.1:{port}"
-    redis = Redis.from_url(url)
-    for _ in range(50):
-        with contextlib.suppress(Exception):
-            if await redis.ping():
-                break
-        await asyncio.sleep(0.1)
-    yield url
-    await redis.aclose()
-    server.terminate()
-    server.wait(timeout=10)
 
 
 @pytest.fixture
@@ -327,33 +307,6 @@ async def test_the_storefront_only_serves_this_copys_slots(demo):
 # -- Agent events --------------------------------------------------------------------------
 
 
-async def _fake_model_stream(_messages, _info):
-    """A model that streams a sentence, then answers through Pydantic AI's output tool."""
-    from pydantic_ai.models.function import DeltaToolCall
-
-    for chunk in ("Reading the issue. ", "Nothing is ", "left open."):
-        yield chunk
-    yield {0: DeltaToolCall(name="final_result", json_args='{"questions": []}')}
-
-
-def _real_agents_on_a_fake_model(monkeypatch):
-    """The real agent Workflows and Pydantic AI agents, with one fake model in the registry
-    instead of the provider models (which need API keys). The registry is built when
-    agents.runtime is first imported, so nothing may import it before this."""
-    import sys
-
-    from pydantic_ai.models.function import FunctionModel
-
-    from agentic_sdlc.agents import kit_ext, registry
-
-    assert "agentic_sdlc.agents.runtime" not in sys.modules, "agents.runtime was imported before its registry was faked"
-    monkeypatch.setattr(registry, "build_registry",
-                        lambda: {"google:fake": kit_ext.DemoModel(FunctionModel(stream_function=_fake_model_stream))})
-    from agentic_sdlc.agents import runtime, workflows
-
-    return runtime, workflows
-
-
 async def test_an_agents_events_stream_to_the_console_from_its_workflow(demo, monkeypatch):
     """A real agent turn, sent the way the pipeline sends it (the agent-turn Activity): its model
     output reaches the run's SSE stream, read from the agent Workflow's own stream, the Activity
@@ -367,7 +320,9 @@ async def test_an_agents_events_stream_to_the_console_from_its_workflow(demo, mo
     from agentic_sdlc.models import AgentInit, AgentRef, ModelChoice, PlanRequest
     from agentic_sdlc.temporal_client import connect
 
-    runtime, workflows = _real_agents_on_a_fake_model(monkeypatch)
+    from agentic_sdlc.agents import runtime, workflows
+
+    monkeypatch.setattr(fake_model.SCRIPT, "behavior", "answer")
     client, _fakes, copy = demo
     monkeypatch.setenv("TEMPORAL_ADDRESS", client.service_client.config.target_host)
     agent_client = await connect(tools=ALL_TOOLS)
@@ -424,7 +379,7 @@ async def test_an_agents_events_stream_to_the_console_from_its_workflow(demo, mo
             reading.cancel()
             types = [e["type"] for e in events]
             assert {"model_interaction_started", "reply_delta", "model_interaction_ended", "message_handler_end"} <= set(types)
-            assert "".join(e["text"] for e in events if e["type"] == "reply_delta") == "Reading the issue. Nothing is left open."
+            assert "".join(e["text"] for e in events if e["type"] == "reply_delta") == "".join(fake_model.ANSWER_CHUNKS)
             assert {e["agent_workflow_id"] for e in events} == {agent_id}
             assert [key async for key in state.redis.scan_iter("agent-events:*")] == []
             await agent_client.get_workflow_handle(agent_id).signal("close")

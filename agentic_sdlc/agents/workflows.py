@@ -72,7 +72,7 @@ def approval_policy(autonomy: Autonomy) -> ToolApprovalPolicy:
 
 def usage_of(result, model_key: str) -> Usage:
     """Tokens for a turn. Cost is filled in by the pipeline's agent-turn Activity."""
-    usage = result.usage() if callable(result.usage) else result.usage
+    usage = result.usage  # a property since Pydantic AI 2.x; calling it is deprecated
     return Usage(
         model=model_key,
         requests=usage.requests,

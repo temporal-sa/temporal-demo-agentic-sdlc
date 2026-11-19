@@ -238,7 +238,7 @@ result = await workflow.execute_activity_method(
 
 **What you need to understand:**
 
-- `CODER` is a Pydantic AI agent wrapped in `TemporalAgent`, so each model request is an Activity. Each tool call (read the changelog in `node_modules`, edit a file, run the tests) is an Agent Kit activity tool.
+- `CODER` is a Pydantic AI agent with the Agent Kit's durability capability (`TemporalAgentKitDurability`), so each model request is an Activity, heartbeating so a dead worker is noticed in seconds. Each tool call (read the changelog in `node_modules`, edit a file, run the tests) is an Agent Kit activity tool.
 - The run talks to the agent through an Activity. A retried Activity re-sends with the same update ID, Temporal returns the original acceptance, and it waits for the same turn. The agent kept running through the crash.
 - One agent class serves every provider: the model is picked per copy in **Start a scenario**, by key, such as `anthropic:claude-sonnet-5-5`.
 

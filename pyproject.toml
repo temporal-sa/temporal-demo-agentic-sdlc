@@ -7,8 +7,9 @@ requires-python = ">=3.13,<3.15"
 dependencies = [
     "temporalio==1.36.1",
     "temporal-agent-kit[pydantic-ai]==0.12.1",
-    "pydantic-ai-slim[anthropic,google,openai,temporal]==2.53.0",
-    # anthropic 2.x changed its message types in a way Pydantic AI 2.53 can't construct yet.
+    "pydantic-ai-slim[anthropic,google,openai,temporal]==2.71.0",
+    # anthropic 2.x needed Pydantic AI 2.60 or later (it has 2.71 now); moving to it is a separate,
+    # tested change.
     "anthropic>=1.9,<2",
     "pydantic>=2.13",
     "fastapi>=0.136",
