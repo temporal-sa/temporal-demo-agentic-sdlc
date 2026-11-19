@@ -238,11 +238,11 @@ result = await workflow.execute_activity_method(
 
 **What you need to understand:**
 
-- `CODER` is a Pydantic AI agent wrapped in `TemporalAgent`, so each model request is an Activity. Each tool call (read the changelog in `node_modules`, edit a file, run the tests) is a harness activity tool.
+- `CODER` is a Pydantic AI agent wrapped in `TemporalAgent`, so each model request is an Activity. Each tool call (read the changelog in `node_modules`, edit a file, run the tests) is an Agent Kit activity tool.
 - The run talks to the agent through an Activity. A retried Activity re-sends with the same update ID, Temporal returns the original acceptance, and it waits for the same turn. The agent kept running through the crash.
 - One agent class serves every provider: the model is picked per copy in **Start a scenario**, by key, such as `anthropic:claude-sonnet-5-5`.
 
-**Docs:** [Pydantic AI durable execution with Temporal](https://ai.pydantic.dev/durable_execution/temporal/), [temporal-agent-harness](https://github.com/temporal-sa/temporal-agent-harness)
+**Docs:** [Pydantic AI durable execution with Temporal](https://ai.pydantic.dev/durable_execution/temporal/), [Temporal Agent Kit](https://github.com/temporal-community/temporal-agent-kit)
 
 ### The branch is the agent's durable workspace
 

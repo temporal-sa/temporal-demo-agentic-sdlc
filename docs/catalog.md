@@ -103,8 +103,13 @@ than Signals and polling added a few Actions per gate, so the GitHub-native flow
 **170 Actions**. That's 1 Workflow start, 4 child agents (8), about 130 Activity attempts (model calls,
 tool calls, GitHub, deploys and checks, including the retries after the crash), 12 Updates, 6 canary
 timers, 4 Signals and about 10 heartbeats that reached the server. A run with a rollback adds a handful.
-The console reads progress with Describe and List, which aren't billable, and streams agent events from
-Redis rather than Workflow history. Count it yourself with the history of any run in the Temporal UI.
+The console reads progress with Describe and List, which aren't billable. That count predates agent
+events moving into the agents' own Workflow Streams (they went through Redis then), so it leaves out
+streaming, which now adds to it: each agent's model and tool Activities publish their events as
+Signals, at most one per 50 ms while a call streams, and every reader (the agent-turn Activity
+waiting for a reply, and each open console) reads them with Updates, one per batch, at most one a
+second for the Activity and four a second for a console. A real run hasn't been measured since.
+Count it yourself with the history of a run and its agents in the Temporal UI.
 
 Slots add a few Actions per lease (the `Slot` Workflow, its Updates and timers, and the cleanup
 Activities) plus heartbeats from the two host Activities (one per pipeline version) of each *leased*

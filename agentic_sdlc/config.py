@@ -97,10 +97,9 @@ def check_label_length() -> None:
                            "Use a shorter TEMPORAL_TASK_QUEUE.")
 
 
+# Demo machinery the web and worker processes share: presenter faults, slot Worker liveness and
+# each slot's run settings. Every key is scoped to a task queue. Agent events don't go here.
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
-# Crashable clones share one Redis per clone namespace, but keep the queue in the prefix so
-# a shared Redis can never mix two workspaces' agent events.
-REDIS_KEY_PREFIX = f"agent-events:{TASK_QUEUE}"
 
 GITHUB_SANDBOX_REPO = os.environ.get("GITHUB_SANDBOX_REPO", "temporal-sa/agentic-sdlc-storefront")
 

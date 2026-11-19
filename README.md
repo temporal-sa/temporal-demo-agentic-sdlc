@@ -12,7 +12,7 @@ What you'll see go wrong, and what happens next:
 
 Everything is driven by GitHub's webhooks and everyone talks to the agents on GitHub. The console is a window onto what the agents are doing.
 
-- **Agents are Workflows.** Each planner, coder and reviewer is a [temporal-agent-harness](https://github.com/temporal-sa/temporal-agent-harness) agent running [Pydantic AI](https://ai.pydantic.dev/durable_execution/temporal/) on Anthropic, OpenAI or Gemini. Every model call and tool call is an [Activity](https://docs.temporal.io/activities), so a crash loses nothing that already finished.
+- **Agents are Workflows.** Each planner, coder and reviewer is a [Temporal Agent Kit](https://github.com/temporal-community/temporal-agent-kit) agent running [Pydantic AI](https://ai.pydantic.dev/durable_execution/temporal/) on Anthropic, OpenAI or Gemini. Every model call and tool call is an [Activity](https://docs.temporal.io/activities), so a crash loses nothing that already finished.
 - **Each scenario is one Workflow** that reads top to bottom as its lifecycle: [`DependencyRepair`](agentic_sdlc/pipeline/dependency.py), [`PullRequestReview`](agentic_sdlc/pipeline/review.py) and [`IssueToProduction`](agentic_sdlc/pipeline/workflow.py), sharing [`pipeline/base.py`](agentic_sdlc/pipeline/base.py). They start agents as [Child Workflows](https://docs.temporal.io/child-workflows), with one coder per subtask in parallel.
 - **GitHub drives it, with no polling.** The web server verifies each webhook's signature, starts a run for a new issue or PR, and delivers every comment to the runs watching that issue or PR as a [Signal](https://docs.temporal.io/develop/python/workflows/message-passing), found with a Visibility query on a search attribute. A run waiting for people costs nothing.
 - **Promotions are approvals on GitHub, not comments.** At the plan, the merge (when supervised) and production, the run dispatches the storefront's [`release.yml`](sandbox-template/.github/workflows/release.yml), whose job waits on a GitHub Environment (`plan-approval`, `merge-approval`, `production`) with required reviewers. A reviewer opens the waiting run in Actions and chooses *Review deployments*; the `workflow_run` webhook (the run succeeding, failing or being cancelled) carries the answer back as a Signal. Who may promote is GitHub's decision: the Environment's reviewers, and no one else, whatever they type.
@@ -21,7 +21,8 @@ Everything is driven by GitHub's webhooks and everyone talks to the agents on Gi
 - **Retries come from [Retry Policies](https://docs.temporal.io/encyclopedia/retry-policies),** including GitHub's `Retry-After`. A per-run budget is enforced by the Workflow before every agent turn.
 - **The canary bakes on a durable timer.** If its checks fail, a saga stops the traffic, reverts the merge through a PR and reopens the issue.
 - **[Worker Versioning](https://docs.temporal.io/worker-versioning)** with Pinned Workflows lets the pipeline change (v2 adds a security-review agent) while runs are in flight.
-- **Agent events stream through Redis** with the harness's `RedisEventStream`, so live streaming costs no Actions. The console reads run progress with Describe.
+- **Agent events stream from the agent Workflows themselves.** Each agent publishes its model output, tool calls and approvals to a [Workflow Stream](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/workflow_streams) the console reads, so streaming costs Actions: each flush from an Activity is a Signal and each read an Update. The console reads run progress with Describe, which is free.
+- **Redis holds only demo machinery** the web and worker processes share: the presenter's faults, which slot Workers are alive, and each slot's model choices.
 
 ## How it works
 
@@ -43,13 +44,14 @@ flowchart LR
       pipeline["DependencyRepair · PullRequestReview<br/>IssueToProduction Workflows"]:::controller
       agents["Planner · Coders · Reviewer<br/>agent Workflows"]:::controller
     end
-    redis[("Redis<br/>agent events")]:::resource
+    redis[("Redis<br/>faults · liveness · settings")]:::resource
     llm["Anthropic · OpenAI · Gemini"]:::keda
     github -- webhooks --> web
     browser --> web --> temporal --> w
     agents --> llm
     pipeline -- comments · commits · statuses --> github
-    agents -- events --> redis --> web
+    agents -. events .-> temporal
+    web & w <--> redis
   end
   classDef card fill:#141414,stroke:#141414,color:#141414
   class card card
@@ -125,7 +127,7 @@ Open the console at http://localhost:8000 and the Temporal UI at http://localhos
 
 ## Notes
 
-- **Harness fork.** This uses the temporal-sa fork of temporal-agent-harness, pinned to commit `f12f194` on its `pluggable-event-streams` branch, for `RedisEventStream`. `agents/harness_ext.py` holds the few workarounds it needs for Pydantic AI 2.53, each commented with why.
+- **Temporal Agent Kit 0.12.1** from PyPI (`temporal-agent-kit[pydantic-ai]`). `agents/kit_ext.py` holds the few workarounds it needs with Pydantic AI 2.53's `TemporalAgent`, each commented with why.
 - **Both pipeline versions run all the time,** one worker each, and the console makes one current through Temporal's Worker Deployment API (the pizza Worker Versioning demo's approach), so the rollout works live in the catalog. The v2 pipeline is the same code with `PIPELINE_VERSION=v2`. Each Worker Deployment Version always runs with one value, so a Pinned run replays against the path it started on. In a real project v2 would be the next commit.
 - **Agents never wait for tool approvals.** Every tool call is auto-approved, since nobody could approve one from GitHub; people gate the plan, the merge and the release instead.
 - **Agent-written tests** run in the worker with a clean environment and a timeout, not in an isolated sandbox. See [docs/catalog.md](docs/catalog.md).

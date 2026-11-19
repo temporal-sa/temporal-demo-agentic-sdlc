@@ -1,6 +1,6 @@
 """Run Workflow tests against a local Temporal dev server.
 
-The agents and the outside world are replaced: fake agent Workflows stand in for the harness
+The agents and the outside world are replaced: fake agent Workflows stand in for the Agent Kit
 agents, and Activities with the real names return canned answers. People act the way they do in
 the demo, on GitHub: each comment reaches the run as the ``github_comment`` Signal the webhook
 sends. What's under test is the orchestration: gates and commands, the conversation with people,

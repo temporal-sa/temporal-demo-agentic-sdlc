@@ -601,7 +601,7 @@ And replace storefront issue with whatever you'd give agents first: a migration 
     d.headline(s, "Take it with you.")
     cards = [
         ("Demo repository", "github.com/temporal-sa/temporal-demo-agentic-sdlc", "Pipeline, agents, console, RUNBOOK"),
-        ("Agent harness", "github.com/temporal-sa/temporal-agent-harness", "Durable agents on Temporal with Pydantic AI"),
+        ("Temporal Agent Kit", "github.com/temporal-community/temporal-agent-kit", "Durable agents on Temporal with Pydantic AI"),
         ("Pydantic AI + Temporal", "ai.pydantic.dev/durable_execution/temporal", "Model and tool calls as Activities"),
         ("Worker Versioning", "docs.temporal.io/worker-versioning", "Change code while work is in flight"),
     ]
@@ -613,7 +613,7 @@ And replace storefront issue with whatever you'd give agents first: a migration 
         d.text(s, x + int(0.4 * IN), y + int(0.22 * IN), int(3.7 * IN), int(0.35 * IN), title, size=15, bold=True)
         d.text(s, x + int(0.4 * IN), y + int(0.6 * IN), int(3.7 * IN), int(0.3 * IN), what, size=10, color=INDIGO)
         d.text(s, x + int(0.4 * IN), y + int(0.9 * IN), int(3.7 * IN), int(0.3 * IN), url, size=9, color=MUTED, font=MONO)
-    d.notes(s, "Everything you saw is open: the demo, the harness, and the docs for the two features that carried most of the weight.")
+    d.notes(s, "Everything you saw is open: the demo, the Agent Kit, and the docs for the two features that carried most of the weight.")
 
     # 24. Sources
     s = d.slide()

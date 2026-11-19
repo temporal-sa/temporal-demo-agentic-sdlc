@@ -11,15 +11,16 @@ import uuid
 from pydantic_ai.durable_exec.temporal import AgentPlugin
 from temporalio.worker import Worker
 
-from temporal_agent_harness.harness.agent_client import AgentClient
-from temporal_agent_harness.harness.agent_protocol import AgentConfig
+from temporal_agent_kit.agent_client import AgentClient
+from temporal_agent_kit.agent_protocol import AgentConfig
 
 from agentic_sdlc import config
+from agentic_sdlc.activities.agent_turn import await_reply
 from agentic_sdlc.agents.runtime import ALL_AGENTS
 from agentic_sdlc.agents.tools import ALL_TOOLS
 from agentic_sdlc.agents.workflows import CoderAgent
 from agentic_sdlc.models import AgentInit, CodeRequest, ModelChoice, Subtask, Workspace
-from agentic_sdlc.temporal_client import EVENT_STREAM, connect
+from agentic_sdlc.temporal_client import connect
 
 
 async def main(model_key: str) -> None:
@@ -36,7 +37,7 @@ async def main(model_key: str) -> None:
         init = AgentInit(run_id="smoke", model=ModelChoice(provider=provider, model=model),
                          workspace=Workspace(repo=config.GITHUB_SANDBOX_REPO, branch=branch))
         await client.start_workflow("CoderAgent", args=[AgentConfig(), init], id=wf_id, task_queue=tq)
-        agent = AgentClient(client, wf_id, event_stream=EVENT_STREAM)
+        agent = AgentClient(client, wf_id)
         req = CodeRequest(issue_title="Add a free-shipping threshold",
                           plan_summary="Orders of $75 or more ship free; others pay $6.",
                           subtask=Subtask(id="shipping-logic", title="Shipping cost in cart logic",
@@ -44,8 +45,7 @@ async def main(model_key: str) -> None:
                                           files=["src/cart.js", "tests/cart.test.js"]))
         reply = await agent.submit_message("code", req.model_dump())
         print("accepted", reply.message_id)
-        result = await agent.await_message(reply.message_id)
-        print("RESULT", result.output or result.error)
+        print("RESULT", await await_reply(client, wf_id, reply))
         await client.get_workflow_handle(wf_id).signal("close")
     print("branch:", f"https://github.com/{config.GITHUB_SANDBOX_REPO}/commits/{branch}")
 

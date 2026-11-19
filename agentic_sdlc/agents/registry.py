@@ -76,7 +76,7 @@ def _build(provider: Provider, name: str):
 
 def build_registry():
     """Every allowed model this worker has a key for, keyed ``provider:model``."""
-    from agentic_sdlc.agents.harness_ext import DemoModel
+    from agentic_sdlc.agents.kit_ext import DemoModel
 
     registry = {
         f"{provider}:{name}": DemoModel(_build(provider, name))
