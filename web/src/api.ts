@@ -85,7 +85,7 @@ export type Criterion = "D1" | "D2" | "D3" | "D4" | "D5" | "D6" | "D7";
 
 export interface AgentEvent {
   agent_workflow_id: string; offset: number; timestamp: number; type: string;
-  tool_id?: string; tool_name?: string; tool_input?: Record<string, unknown>; output?: unknown; error?: string;
+  tool_id?: string; tool_name?: string; tool_input?: Record<string, unknown>; tool_output?: unknown; message?: string;
   text?: string; model?: string | null; usage?: { input_tokens?: number | null; output_tokens?: number | null } | null;
   [key: string]: unknown;
 }
