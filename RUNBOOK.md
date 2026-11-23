@@ -382,7 +382,7 @@ uv run python scripts/dev.py
 
 Your laptop is its own copy of the demo: task queue `local-<your GitHub login>`, acting only on items labeled `agentic-sdlc:local-<login>`. "Start a scenario" labels what it opens; to drive the laptop from GitHub by hand, add that label to your issue or PR. GitHub allows one forwarder per repo at a time.
 
-For a cheaper rehearsal, pick `claude-haiku-5-5` or `gemini-3.5-flash` for every role in **Start a scenario**.
+For a cheaper rehearsal, pick `claude-haiku-5-5` or `gemini-3.6-flash` for every role in **Start a scenario**.
 
 Local troubleshooting:
 

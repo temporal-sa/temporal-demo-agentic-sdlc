@@ -17,7 +17,7 @@ from agentic_sdlc.models import ModelChoice, Provider
 DEFAULT_ALLOWLIST: dict[Provider, tuple[str, ...]] = {
     "anthropic": ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"),
     "openai": ("gpt-5.5", "gpt-5.4-mini"),
-    "google": ("gemini-3.5-flash", "gemini-3.1-pro-preview"),
+    "google": ("gemini-3.6-flash", "gemini-3.1-pro-preview"),
 }
 
 _KEY_ENV: dict[Provider, tuple[str, ...]] = {
